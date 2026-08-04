@@ -32,8 +32,11 @@
 flowchart LR
     U[사용자 브라우저] --> LB[Load Balancer]
     subgraph VPC[NCP VPC]
-      subgraph Public[Public Subnet]
+      subgraph Public[Public LB Subnet]
         LB
+      end
+      subgraph NatPublic[Public NAT Subnet]
+        NAT[NAT Gateway]
       end
       subgraph App[Private App Subnet]
         API[FastAPI API]
@@ -43,16 +46,16 @@ flowchart LR
       subgraph Data[Private Data Subnet]
         DB[(Cloud DB for PostgreSQL<br/>서비스 DB · jobs · pgvector)]
       end
-      NAT[NAT Gateway]
       API --> DB
       API --> NAT
       SCH --> DB
       W --> DB
       W --> NAT
     end
-    NAT --> YT[YouTube]
-    NAT --> STUDIO[CLOVA Studio<br/>Embedding · Chat]
-    NAT --> SPEECH[CLOVA Speech<br/>자막 없을 때 STT]
+    NAT --> IGW[Internet Gateway]
+    IGW --> YT[YouTube]
+    IGW --> STUDIO[CLOVA Studio<br/>Embedding · Chat]
+    IGW --> SPEECH[CLOVA Speech<br/>자막 없을 때 STT]
     W --> OS[Object Storage<br/>private bucket]
     LOG[Cloud Log Analytics / Insight] -. 관찰 .-> API
     LOG -. 관찰 .-> W
@@ -62,11 +65,20 @@ flowchart LR
 ### 네트워크 원칙
 
 - 공개 인바운드는 `사용자 → Load Balancer → API` 하나다. Worker와 PostgreSQL에는 public IP나 공개 포트를 열지 않는다.
+- Public LB Subnet과 Public NAT Subnet은 분리한다. NAT 전용 subnet에는 NAT Gateway만 두고, 애플리케이션 서버를 배치하지 않는다.
 - 채널 스케줄러는 Private App subnet의 Worker cron으로 실행한다. public IP·공개 endpoint·Load Balancer 경로 없이 PostgreSQL `jobs`에만 `scan_channel` 작업을 등록한다.
 - API와 Worker만 PostgreSQL ACG 접근을 허용한다.
-- API와 Worker가 YouTube·CLOVA API를 호출할 때만 NAT Gateway를 통한 outbound 통신을 허용한다.
+- Private App subnet의 `0.0.0.0/0` route target은 NAT Gateway다. API와 Worker가 YouTube·CLOVA API를 호출할 때만 `Private App → Public NAT Subnet → Internet Gateway` outbound 통신을 허용한다.
+- Private Data subnet의 PostgreSQL에는 현재 외부 호출이 없으므로 `LOCAL` route만 둔다. DB에 인터넷 기본 경로를 추가하지 않는다.
 - Object Storage 버킷은 private으로 유지한다. 원본 VTT·오디오·STT 결과는 Object Storage에, 검색용 청크와 embedding은 PostgreSQL에 둔다.
 - API key, DB 비밀번호, Object Storage 접근 키는 이미지·Git·브라우저 JavaScript에 넣지 않고 서버 런타임 환경 변수 또는 비밀 저장소로 주입한다.
+
+| subnet | `0.0.0.0/0` route target | 역할 |
+| --- | --- | --- |
+| Public LB Subnet | Internet Gateway | Load Balancer의 공개 HTTPS 수신 |
+| Public NAT Subnet | Internet Gateway | NAT Gateway의 외부 송신 |
+| Private App Subnet | NAT Gateway | API·Worker의 YouTube·CLOVA 호출 |
+| Private Data Subnet | 없음 | PostgreSQL 내부 통신만 허용 |
 
 ## 세 가지 서비스 흐름은 서로 다르다
 
@@ -78,7 +90,8 @@ flowchart LR
 flowchart LR
     S[채널 스케줄러] -->|INSERT queued| J[(PostgreSQL jobs<br/>scan_channel)]
     J <-->|poll queued · claim running| W[Analysis Worker]
-    W --> Y[YouTube]
+    W --> N[NAT Gateway]
+    N --> Y[YouTube]
     Y --> V[(videos 테이블<br/>제목 · 설명 · 업로드일)]
 ~~~
 
@@ -94,13 +107,14 @@ flowchart LR
     B[사용자: 분석하기] --> A[FastAPI API]
     A -->|INSERT queued| J[(PostgreSQL jobs<br/>analyze_video)]
     J <-->|poll queued · claim running| W[Analysis Worker]
-    W --> Y[YouTube 자막 수집]
+    W --> N[NAT Gateway]
+    N --> Y[YouTube 자막 수집]
     Y --> C{자막 있음?}
     C -->|예| T[자막 구간 정규화]
     C -->|아니오| S[Object Storage 오디오]
-    S --> P[CLOVA Speech STT]
+    S -->|NAT 경유| P[CLOVA Speech STT]
     P -->|STT text 반환| T
-    T -->|embedding 요청| E[CLOVA Studio Embedding]
+    T -->|NAT 경유 embedding 요청| E[CLOVA Studio Embedding]
     E -->|vector 반환| W2[같은 Worker<br/>원문 · 시간 · vector 저장]
     W2 --> R[(transcript_chunks + pgvector)]
 ~~~
@@ -115,11 +129,11 @@ flowchart LR
 ~~~mermaid
 flowchart LR
     B[사용자 질문] --> A[FastAPI API]
-    A -->|질문 embedding 요청| E[CLOVA Studio Embedding]
+    A -->|NAT 경유 질문 embedding 요청| E[CLOVA Studio Embedding]
     E -->|질문 vector 반환| A
     A -->|Top-K 검색| P[(pgvector)]
     P -->|원문 자막 · 시간 반환| A
-    A -->|근거 + 질문| C[CLOVA Studio Chat]
+    A -->|NAT 경유 근거 + 질문| C[CLOVA Studio Chat]
     C -->|자연어 답변 반환| A
     A --> R[답변 + 실제 재생 시간 링크]
 ~~~
