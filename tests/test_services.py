@@ -63,6 +63,18 @@ def test_guest_workspace_is_restored_or_connected_by_code():
         with TestClient(main.app) as first_browser:
             first_workspace = first_browser.get("/auth/me").json()
             assert first_browser.get("/auth/me").json()["workspace_code"] == first_workspace["workspace_code"]
+            origin = "http://localhost:5173"
+            preflight = first_browser.options(
+                "/chat",
+                headers={
+                    "Origin": origin,
+                    "Access-Control-Request-Method": "POST",
+                    "Access-Control-Request-Headers": "content-type",
+                },
+            )
+            assert preflight.status_code == 200
+            assert preflight.headers["access-control-allow-origin"] == origin
+            assert preflight.headers["access-control-allow-credentials"] == "true"
 
         with TestClient(main.app) as second_browser:
             second_workspace = second_browser.get("/auth/me").json()
