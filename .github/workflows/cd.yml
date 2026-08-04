@@ -1,0 +1,83 @@
+name: CD - NCP private server
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Deploy this branch, tag, or commit SHA"
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ncp-private-server-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to NCP private server
+    runs-on: ubuntu-latest
+    environment: ncp-production
+    env:
+      NCP_DEPLOY_HOST: ${{ secrets.NCP_DEPLOY_HOST }}
+      NCP_DEPLOY_USER: ${{ secrets.NCP_DEPLOY_USER }}
+      NCP_SSH_PRIVATE_KEY: ${{ secrets.NCP_SSH_PRIVATE_KEY }}
+      NCP_SSH_KNOWN_HOSTS: ${{ secrets.NCP_SSH_KNOWN_HOSTS }}
+      NCP_DEPLOY_PATH: ${{ vars.NCP_DEPLOY_PATH }}
+      NCP_API_SERVICE: ${{ vars.NCP_API_SERVICE }}
+      NCP_WORKER_SERVICE: ${{ vars.NCP_WORKER_SERVICE }}
+
+    steps:
+      - name: Check out requested revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Resolve deploy revision
+        id: revision
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Verify before deployment
+        run: |
+          python -m pip install -r requirements.txt
+          python -m compileall -q app
+          python -m pytest -q
+
+      - name: Validate NCP deployment configuration
+        run: |
+          test -n "$NCP_DEPLOY_HOST" || { echo "Missing NCP_DEPLOY_HOST secret"; exit 1; }
+          test -n "$NCP_DEPLOY_USER" || { echo "Missing NCP_DEPLOY_USER secret"; exit 1; }
+          test -n "$NCP_SSH_PRIVATE_KEY" || { echo "Missing NCP_SSH_PRIVATE_KEY secret"; exit 1; }
+          test -n "$NCP_SSH_KNOWN_HOSTS" || { echo "Missing NCP_SSH_KNOWN_HOSTS secret"; exit 1; }
+          test -n "$NCP_DEPLOY_PATH" || { echo "Missing NCP_DEPLOY_PATH variable"; exit 1; }
+          test -n "$NCP_API_SERVICE" || { echo "Missing NCP_API_SERVICE variable"; exit 1; }
+          test -n "$NCP_WORKER_SERVICE" || { echo "Missing NCP_WORKER_SERVICE variable"; exit 1; }
+
+      - name: Prepare SSH
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$NCP_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$NCP_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy checked revision
+        env:
+          DEPLOY_SHA: ${{ steps.revision.outputs.sha }}
+        run: |
+          ssh -o BatchMode=yes "$NCP_DEPLOY_USER@$NCP_DEPLOY_HOST" \
+            "cd '$NCP_DEPLOY_PATH' && \
+             git fetch origin '$DEPLOY_SHA' && \
+             git checkout --detach '$DEPLOY_SHA' && \
+             .venv/bin/python -m pip install -r requirements.txt && \
+             sudo systemctl restart '$NCP_API_SERVICE' '$NCP_WORKER_SERVICE'"
