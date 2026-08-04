@@ -38,7 +38,7 @@ flowchart LR
       subgraph App[Private App Subnet]
         API[FastAPI API]
         W[Analysis Worker]
-        SCH[채널 스케줄러]
+        SCH[채널 스케줄러<br/>Worker cron]
       end
       subgraph Data[Private Data Subnet]
         DB[(Cloud DB for PostgreSQL<br/>서비스 DB · jobs · pgvector)]
@@ -62,6 +62,7 @@ flowchart LR
 ### 네트워크 원칙
 
 - 공개 인바운드는 `사용자 → Load Balancer → API` 하나다. Worker와 PostgreSQL에는 public IP나 공개 포트를 열지 않는다.
+- 채널 스케줄러는 Private App subnet의 Worker cron으로 실행한다. public IP·공개 endpoint·Load Balancer 경로 없이 PostgreSQL `jobs`에만 `scan_channel` 작업을 등록한다.
 - API와 Worker만 PostgreSQL ACG 접근을 허용한다.
 - API와 Worker가 YouTube·CLOVA API를 호출할 때만 NAT Gateway를 통한 outbound 통신을 허용한다.
 - Object Storage 버킷은 private으로 유지한다. 원본 VTT·오디오·STT 결과는 Object Storage에, 검색용 청크와 embedding은 PostgreSQL에 둔다.
@@ -81,8 +82,8 @@ flowchart LR
     Y --> V[(videos 테이블<br/>제목 · 설명 · 업로드일)]
 ~~~
 
-- 초기에는 Worker 서버의 cron이 `scan_channel` 작업을 등록한다. 별도 스케줄러 서버는 필요 없다.
-- 필요해지면 NCP Cloud Functions의 cron trigger가 이 작업 등록만 맡도록 바꾼다.
+- 초기에는 Private App subnet의 Worker 서버 cron이 `scan_channel` 작업을 등록한다. 별도 스케줄러 서버는 필요 없다.
+- 스케줄이 많아져 분리하더라도 private app subnet 안의 경량 scheduler 역할로 분리한다. public endpoint나 스케줄러 전용 Load Balancer는 만들지 않는다.
 - Worker는 `yt-dlp --flat-playlist --dump-json --skip-download`로 영상 목록과 간단 메타데이터만 수집한다.
 - 이 단계에서는 자막 다운로드, 오디오 저장, STT, embedding, RAG 문서 생성을 하지 않는다.
 
@@ -246,9 +247,9 @@ Cloud DB for PostgreSQL은 관리형 PostgreSQL과 `pgvector` 확장을 제공�
 | `POST /chat` | HTTPS listener의 기본 규칙 | FastAPI API Target Group |
 | `POST /videos/{id}/analyze` | HTTPS listener의 기본 규칙 | FastAPI API Target Group |
 | `POST /channels/{id}/scan` | HTTPS listener의 기본 규칙 | FastAPI API Target Group |
-| 채널 스케줄러의 주기 실행 | Load Balancer를 통과하지 않음 | PostgreSQL에 `scan_channel` 작업 등록 |
+| Private App subnet 채널 스케줄러의 주기 실행 | Load Balancer를 통과하지 않음 | PostgreSQL에 `scan_channel` 작업 등록 |
 
-스케줄러는 외부 사용자의 HTTP 요청을 받는 서비스가 아니다. Worker 서버의 cron 또는 Cloud Functions가 내부에서 작업만 등록하므로, 스케줄러 전용 Load Balancer나 Target Group을 만들지 않는다.
+스케줄러는 외부 사용자의 HTTP 요청을 받는 서비스가 아니다. Private App subnet의 Worker cron이 내부 DB에 작업만 등록하므로, public IP·스케줄러 전용 Load Balancer·Target Group을 만들지 않는다.
 
 NCP Application Load Balancer는 Host Header와 Path Pattern 조건으로 서로 다른 Target Group에 분기할 수 있다. 따라서 나중에 `api.example.com`과 별도 관리자 애플리케이션을 운영하거나, 완전히 다른 HTTP 서버를 추가하면 하나의 Load Balancer에서 도메인/경로별 분기를 검토할 수 있다. 그러나 현재는 모든 공개 endpoint가 같은 FastAPI 코드와 같은 API 서버로 향하므로 분기 규칙을 추가해도 얻는 이점이 없다. [Application Load Balancer 규칙](https://guide.ncloud-docs.com/docs/en/loadbalancer-application-vpc)
 
