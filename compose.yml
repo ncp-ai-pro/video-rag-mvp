@@ -1,0 +1,49 @@
+name: video-rag-mvp
+
+services:
+  api:
+    build: .
+    image: video-rag-mvp:latest
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_PATH: /app/data/video_rag.db
+      YTDLP_BIN: yt-dlp
+    ports:
+      - "8000:8000"
+    volumes:
+      - video-rag-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  worker:
+    build: .
+    image: video-rag-mvp:latest
+    command: ["python", "-m", "app.worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_PATH: /app/data/video_rag.db
+      YTDLP_BIN: yt-dlp
+    volumes:
+      - video-rag-data:/app/data
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  video-rag-data:

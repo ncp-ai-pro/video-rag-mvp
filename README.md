@@ -32,6 +32,27 @@ cd /Users/kimgt/Developer/Project/ncp-ai/video-rag-mvp
 .venv/bin/python -m app.worker
 ```
 
+## Docker Compose 배포
+
+API와 Worker는 동일한 SQLite `jobs` 테이블과 `data/`를 공유해야 하므로, Compose는 두 컨테이너에 `video-rag-data` 영속 볼륨을 함께 연결한다. 현재 SQLite MVP에서는 Worker를 한 개만 실행한다.
+
+서버 배포 전에는 `.env`를 Git에 올리지 않고 `.env.example`을 복사해 CLOVA 키와 배포 환경 값을 입력한다. `.env`가 없으면 mock 모드 기본값으로도 컨테이너를 띄울 수 있지만, 실제 NCP AI 호출에는 사용할 수 없다.
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+docker compose ps
+```
+
+API는 `http://<SERVER_IP>:8000/health`에서 확인할 수 있다. Load Balancer로 HTTPS를 종료하는 운영 환경에서는 `.env`의 `SESSION_COOKIE_SECURE=true`로 바꾼다.
+
+```bash
+docker compose logs -f api
+docker compose logs -f worker
+```
+
+GitHub Actions의 수동 CD는 서버의 `NCP_DEPLOY_PATH`에서 같은 `docker compose --env-file .env up -d --build --remove-orphans` 명령을 실행한다. 따라서 서버에는 Docker Compose, 이 저장소의 clone, 그리고 Git에 없는 `.env` 파일이 미리 있어야 한다.
+
 `http://127.0.0.1:8000/docs`에서 API를 호출한다. 기본값은 외부 키 없이 테스트되는 `mock` embedding/Chat 모드다. 이 모드는 API와 검색 경로 확인용이며 CLOVA의 의미 유사도나 답변 품질을 검증하지 않는다.
 
 ## 로컬 호출 예시

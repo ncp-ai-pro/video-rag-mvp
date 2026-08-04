@@ -27,8 +27,6 @@ jobs:
       NCP_SSH_PRIVATE_KEY: ${{ secrets.NCP_SSH_PRIVATE_KEY }}
       NCP_SSH_KNOWN_HOSTS: ${{ secrets.NCP_SSH_KNOWN_HOSTS }}
       NCP_DEPLOY_PATH: ${{ vars.NCP_DEPLOY_PATH }}
-      NCP_API_SERVICE: ${{ vars.NCP_API_SERVICE }}
-      NCP_WORKER_SERVICE: ${{ vars.NCP_WORKER_SERVICE }}
 
     steps:
       - name: Check out requested revision
@@ -60,8 +58,6 @@ jobs:
           test -n "$NCP_SSH_PRIVATE_KEY" || { echo "Missing NCP_SSH_PRIVATE_KEY secret"; exit 1; }
           test -n "$NCP_SSH_KNOWN_HOSTS" || { echo "Missing NCP_SSH_KNOWN_HOSTS secret"; exit 1; }
           test -n "$NCP_DEPLOY_PATH" || { echo "Missing NCP_DEPLOY_PATH variable"; exit 1; }
-          test -n "$NCP_API_SERVICE" || { echo "Missing NCP_API_SERVICE variable"; exit 1; }
-          test -n "$NCP_WORKER_SERVICE" || { echo "Missing NCP_WORKER_SERVICE variable"; exit 1; }
 
       - name: Prepare SSH
         run: |
@@ -79,5 +75,4 @@ jobs:
             "cd '$NCP_DEPLOY_PATH' && \
              git fetch origin '$DEPLOY_SHA' && \
              git checkout --detach '$DEPLOY_SHA' && \
-             .venv/bin/python -m pip install -r requirements.txt && \
-             sudo systemctl restart '$NCP_API_SERVICE' '$NCP_WORKER_SERVICE'"
+             docker compose --env-file .env up -d --build --remove-orphans"
