@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video RAG</title>
+  <style>
+    :root { --ink:#172033; --muted:#697386; --line:#dfe3eb; --page:#f5f6f8; --card:#fff; --accent:#1265d6; --soft:#eaf2ff; --danger:#b42318; }
+    * { box-sizing:border-box; } body { margin:0; background:var(--page); color:var(--ink); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    header { height:64px; display:flex; align-items:center; justify-content:space-between; padding:0 28px; background:var(--card); border-bottom:1px solid var(--line); }
+    h1 { font-size:19px; margin:0; letter-spacing:-.02em; } h2 { font-size:15px; margin:0; } .status { color:var(--muted); font-size:13px; }
+    main { max-width:1440px; margin:0 auto; padding:22px 28px; display:grid; grid-template-columns:250px minmax(340px,1fr) minmax(330px,1fr); gap:16px; }
+    section { background:var(--card); border:1px solid var(--line); border-radius:10px; min-height:200px; } .panel-title { padding:16px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
+    .panel-body { padding:16px; } form { display:flex; gap:8px; } input, textarea { width:100%; border:1px solid #c7ced9; border-radius:7px; padding:9px 10px; font:inherit; color:var(--ink); } textarea { min-height:72px; resize:vertical; }
+    button { border:0; border-radius:7px; padding:9px 12px; background:var(--accent); color:#fff; font:inherit; font-weight:650; cursor:pointer; white-space:nowrap; } button.secondary { background:#eef1f5; color:#253247; } button:disabled { opacity:.55; cursor:default; }
+    .channel, .video, .result { width:100%; text-align:left; padding:12px 16px; border:0; border-bottom:1px solid var(--line); background:transparent; color:var(--ink); font-weight:400; } .channel:hover, .video:hover, .result:hover { background:#f8fbff; }
+    .selected { background:var(--soft); box-shadow:inset 3px 0 0 var(--accent); } .name { display:block; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .meta, small { color:var(--muted); font-size:12px; }
+    .empty { color:var(--muted); padding:20px 16px; font-size:13px; } .controls { display:flex; gap:8px; margin-top:10px; } .block { margin-bottom:20px; }
+    .tag { display:inline-block; border-radius:999px; padding:2px 7px; font-size:11px; font-weight:650; background:#eef1f5; color:#556070; } .tag.ready { background:#e9f7ef; color:#19703b; } .tag.failed { background:#fff0ef; color:var(--danger); }
+    .video-header { padding:16px; border-bottom:1px solid var(--line); } .video-header a { color:var(--accent); text-decoration:none; font-size:13px; } .analysis-note { font-size:13px; color:var(--muted); margin:10px 0; }
+    .result { display:block; text-decoration:none; } .score { float:right; color:var(--muted); font-size:12px; } .evidence { border-left:3px solid var(--accent); padding:10px 12px; margin-top:10px; background:#f8fbff; } .evidence a { color:var(--accent); font-weight:650; text-decoration:none; }
+    #toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:#172033; color:#fff; padding:10px 14px; border-radius:7px; font-size:13px; display:none; max-width:90vw; }
+    @media (max-width: 980px) { main { grid-template-columns:230px 1fr; } #chat-panel { grid-column:1 / -1; } }
+    @media (max-width: 650px) { header { padding:0 16px; } main { display:block; padding:12px; } section { margin-bottom:12px; } }
+  </style>
+</head>
+<body>
+  <header><h1>Video RAG</h1><div><span class="status" id="workspace-code">작업공간 확인 중</span> <button id="connect-workspace" class="secondary">기존 작업공간 연결</button> <button id="new-workspace" class="secondary">새 작업공간</button> <span class="status" id="server-status">서버 확인 중</span></div></header>
+  <main>
+    <section aria-labelledby="channels-title">
+      <div class="panel-title"><h2 id="channels-title">채널</h2></div>
+      <div class="panel-body">
+        <form id="channel-form"><input id="channel-url" type="url" placeholder="YouTube 채널 URL" required aria-label="YouTube 채널 URL"><button>등록</button></form>
+        <div class="controls"><button id="scan-button" class="secondary" disabled>새 영상 탐색</button></div>
+      </div>
+      <div id="channels"><p class="empty">등록된 채널이 없습니다.</p></div>
+    </section>
+
+    <section aria-labelledby="videos-title">
+      <div class="panel-title"><h2 id="videos-title">영상 카탈로그</h2><span class="meta" id="video-count"></span></div>
+      <div id="videos"><p class="empty">채널을 선택하면 영상 메타데이터가 표시됩니다.</p></div>
+    </section>
+
+    <section id="chat-panel" aria-labelledby="chat-title">
+      <div class="panel-title"><h2 id="chat-title">분석과 질문</h2></div>
+      <div class="panel-body">
+        <div id="selected-video"><p class="empty">왼쪽에서 채널을 선택하고, 가운데에서 분석할 영상을 고르세요.</p></div>
+        <div class="block">
+          <label for="recommendation-query" class="name">메타데이터 추천</label>
+          <p class="analysis-note">제목과 영상 설명의 embedding 유사도만 사용합니다.</p>
+          <form id="recommendation-form"><input id="recommendation-query" placeholder="예: FastAPI RAG"><button>찾기</button></form>
+          <div id="recommendations"></div>
+        </div>
+        <div class="block">
+          <label for="chat-query" class="name">RAG 질문</label>
+          <p class="analysis-note">분석 완료된 자막에서 근거 구간을 최대 3개 반환합니다.</p>
+          <form id="chat-form"><input id="chat-query" placeholder="영상에서 RAG 구축 순서를 설명해줘"><button>질문</button></form>
+          <div id="answer"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <div id="toast" role="status"></div>
+  <script>
+    let selectedChannelId = null;
+    let selectedVideo = null;
+    let analysisEventSource = null;
+    let analysisEventVideoId = null;
+    const byId = (id) => document.getElementById(id);
+    const esc = (text = '') => String(text).replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
+    const toast = (message) => { const el = byId('toast'); el.textContent = message; el.style.display = 'block'; setTimeout(() => el.style.display = 'none', 3200); };
+    async function api(path, options = {}) { const response = await fetch(path, { headers: {'Content-Type':'application/json'}, ...options }); if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || '요청에 실패했습니다.'); } return response.status === 204 ? null : response.json(); }
+    const isAnalyzed = (status) => status === 'ready' || status === 'succeeded';
+    const isAnalysisActive = (status) => status === 'queued' || status === 'running';
+    const statusClass = (status) => isAnalyzed(status) ? 'ready' : status === 'failed' ? 'failed' : '';
+
+    function closeAnalysisEvents() { if (analysisEventSource) analysisEventSource.close(); analysisEventSource = null; analysisEventVideoId = null; }
+    function openAnalysisEvents(videoId) {
+      if (analysisEventSource && analysisEventVideoId === videoId) return;
+      closeAnalysisEvents(); analysisEventVideoId = videoId;
+      const source = new EventSource(`/videos/${videoId}/events`);
+      analysisEventSource = source;
+      source.addEventListener('analysis_status', async (event) => {
+        let update; try { update = JSON.parse(event.data); } catch (_) { return; }
+        if (!selectedVideo || selectedVideo.id !== update.video_id) return;
+        selectedVideo.analysis_status = update.status;
+        selectedVideo.analysis_stage = update.progress.stage;
+        selectedVideo.analysis_message = update.progress.message;
+        selectedVideo.analysis_error = update.error;
+        renderSelectedVideo();
+        await loadVideos();
+        if (update.status === 'succeeded' || update.status === 'failed') closeAnalysisEvents();
+      });
+      source.onerror = () => { /* EventSource reconnects using the server-provided retry value. */ };
+    }
+    function subscribeToSelectedVideoIfNeeded() { if (selectedVideo && isAnalysisActive(selectedVideo.analysis_status)) openAnalysisEvents(selectedVideo.id); else if (analysisEventVideoId) closeAnalysisEvents(); }
+
+    async function loadChannels() {
+      const channels = await api('/channels'); const container = byId('channels');
+      if (!channels.length) { container.innerHTML = '<p class="empty">채널 URL을 등록한 뒤 새 영상 탐색을 실행하세요.</p>'; return; }
+      container.innerHTML = channels.map(channel => `<button class="channel ${channel.id === selectedChannelId ? 'selected' : ''}" data-channel-id="${channel.id}"><span class="name">${esc(channel.name || channel.url)}</span><span class="meta">${channel.last_scanned_at ? '최근 탐색 완료' : '아직 탐색하지 않음'}</span></button>`).join('');
+      container.querySelectorAll('[data-channel-id]').forEach(button => button.onclick = () => selectChannel(Number(button.dataset.channelId)));
+      if (!selectedChannelId) await selectChannel(channels[0].id);
+    }
+    async function selectChannel(channelId) { selectedChannelId = channelId; selectedVideo = null; byId('scan-button').disabled = false; await loadChannels(); await loadVideos(); renderSelectedVideo(); }
+    async function loadVideos() {
+      if (!selectedChannelId) return; const videos = await api(`/channels/${selectedChannelId}/videos`); byId('video-count').textContent = `${videos.length}개`;
+      if (selectedVideo) selectedVideo = videos.find(video => video.id === selectedVideo.id) || null;
+      if (!selectedVideo) selectedVideo = videos.find(video => isAnalysisActive(video.analysis_status)) || null;
+      byId('videos').innerHTML = videos.length ? videos.map(video => `<button class="video ${selectedVideo && video.id === selectedVideo.id ? 'selected' : ''}" data-video-id="${video.id}"><span class="name">${esc(video.title)}</span><span class="meta">${video.uploaded_at || '업로드일 미확인'} · <span class="tag ${statusClass(video.analysis_status)}">${esc(video.analysis_status)}</span></span></button>`).join('') : '<p class="empty">메타데이터가 없습니다. 새 영상 탐색을 실행하고 Worker가 끝날 때까지 기다리세요.</p>';
+      byId('videos').querySelectorAll('[data-video-id]').forEach(button => { const video = videos.find(item => item.id === Number(button.dataset.videoId)); button.onclick = () => { selectedVideo = video; subscribeToSelectedVideoIfNeeded(); loadVideos(); renderSelectedVideo(); }; });
+      subscribeToSelectedVideoIfNeeded();
+    }
+    function renderSelectedVideo() {
+      const container = byId('selected-video'); if (!selectedVideo) { container.innerHTML = '<p class="empty">RAG로 분석할 영상을 선택하세요. 메타데이터 추천은 분석하지 않은 영상도 찾습니다.</p>'; return; }
+      const error = selectedVideo.analysis_error ? `<p class="analysis-note">오류: ${esc(selectedVideo.analysis_error)}</p>` : '';
+      const progress = selectedVideo.analysis_stage ? `<p class="analysis-note">진행: <strong>${esc(selectedVideo.analysis_stage)}</strong>${selectedVideo.analysis_message ? ` · ${esc(selectedVideo.analysis_message)}` : ''}</p>` : '';
+      const disabled = isAnalyzed(selectedVideo.analysis_status) || isAnalysisActive(selectedVideo.analysis_status);
+      const buttonLabel = selectedVideo.analysis_status === 'failed' ? '다시 분석 시작' : isAnalyzed(selectedVideo.analysis_status) ? '질문 가능' : '이 영상 분석 시작';
+      container.innerHTML = `<div class="video-header"><span class="tag ${statusClass(selectedVideo.analysis_status)}">${esc(selectedVideo.analysis_status)}</span><p class="name">${esc(selectedVideo.title)}</p><a href="${esc(selectedVideo.url)}" target="_blank" rel="noreferrer">YouTube에서 열기</a>${progress}${error}<div class="controls"><button id="analyze-button" ${disabled ? 'disabled' : ''}>${buttonLabel}</button></div></div>`;
+      const button = byId('analyze-button'); if (button) button.onclick = analyzeSelectedVideo;
+    }
+    async function analyzeSelectedVideo() { try { const result = await api(`/videos/${selectedVideo.id}/analyze`, {method:'POST'}); toast(`분석 작업 ${result.job_id}번을 등록했습니다. Worker가 처리합니다.`); selectedVideo.analysis_status = 'queued'; selectedVideo.analysis_stage = 'queued'; selectedVideo.analysis_message = '분석 작업을 기다리고 있습니다.'; selectedVideo.analysis_error = null; renderSelectedVideo(); openAnalysisEvents(selectedVideo.id); await loadVideos(); } catch (error) { toast(error.message); } }
+    byId('channel-form').onsubmit = async (event) => { event.preventDefault(); try { const channel = await api('/channels', {method:'POST', body:JSON.stringify({url:byId('channel-url').value})}); byId('channel-url').value = ''; selectedChannelId = channel.id; toast('채널을 등록했습니다. 새 영상 탐색을 실행하세요.'); await loadChannels(); } catch (error) { toast(error.message); } };
+    byId('scan-button').onclick = async () => { try { const result = await api(`/channels/${selectedChannelId}/scan`, {method:'POST'}); toast(`메타데이터 탐색 작업 ${result.job_id}번을 등록했습니다.`); } catch (error) { toast(error.message); } };
+    byId('recommendation-form').onsubmit = async (event) => { event.preventDefault(); try { const result = await api('/recommendations', {method:'POST', body:JSON.stringify({query:byId('recommendation-query').value})}); byId('recommendations').innerHTML = result.items.length ? result.items.map(item => `<a class="result" href="${esc(item.url)}" target="_blank" rel="noreferrer"><span class="name">${esc(item.title)} <span class="score">${item.score}</span></span><span class="meta">${esc(item.basis)}</span></a>`).join('') : '<p class="empty">추천할 메타데이터가 없습니다.</p>'; } catch (error) { toast(error.message); } };
+    byId('chat-form').onsubmit = async (event) => { event.preventDefault(); try { const result = await api('/chat', {method:'POST', body:JSON.stringify({query:byId('chat-query').value})}); byId('answer').innerHTML = `<p>${esc(result.answer)}</p>${result.evidence.map(item => `<div class="evidence"><a href="${esc(item.url)}" target="_blank" rel="noreferrer">${esc(item.title)} · ${Math.floor(item.start_seconds / 60)}:${String(Math.floor(item.start_seconds % 60)).padStart(2,'0')}–${Math.floor(item.end_seconds / 60)}:${String(Math.floor(item.end_seconds % 60)).padStart(2,'0')}</a><br><span class="meta">${esc(item.quote)}</span></div>`).join('')}`; } catch (error) { toast(error.message); } };
+    async function loadWorkspace() { const workspace = await api('/auth/me'); byId('workspace-code').textContent = `작업공간 코드: ${workspace.workspace_code}`; }
+    byId('connect-workspace').onclick = async () => { const code = window.prompt('기존 작업공간 코드를 입력하세요.'); if (!code) return; try { const workspace = await api('/auth/workspace', {method:'POST', body:JSON.stringify({workspace_code:code})}); closeAnalysisEvents(); selectedChannelId = null; selectedVideo = null; byId('workspace-code').textContent = `작업공간 코드: ${workspace.workspace_code}`; await loadChannels(); toast('기존 작업공간에 연결했습니다.'); } catch (error) { toast(error.message); } };
+    byId('new-workspace').onclick = async () => { if (!window.confirm('새 작업공간으로 전환할까요? 현재 작업공간은 코드로 다시 연결할 수 있습니다.')) return; const workspace = await api('/auth/new-workspace', {method:'POST'}); closeAnalysisEvents(); selectedChannelId = null; selectedVideo = null; byId('workspace-code').textContent = `작업공간 코드: ${workspace.workspace_code}`; await loadChannels(); toast('새 작업공간을 만들었습니다.'); };
+    api('/health').then(async () => { byId('server-status').textContent = '로컬 서버 연결됨'; await loadWorkspace(); await loadChannels(); }).catch(() => { byId('server-status').textContent = '서버 연결 실패'; });
+  </script>
+</body>
+</html>
