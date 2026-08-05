@@ -3,7 +3,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from .config import SESSION_MAX_AGE_SECONDS
-from .db import connection
+from .db import connection, is_unique_violation
 
 
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -27,7 +27,7 @@ def create_guest_workspace():
                 ).fetchone()
                 return dict(row)
             except Exception as exc:
-                if "UNIQUE constraint failed" not in str(exc):
+                if not is_unique_violation(exc):
                     raise
     raise RuntimeError("workspace code generation failed")
 

@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video RAG MVP · Load Balancer routing comparison</title>
+  <style>
+    :root{--ink:#14243d;--muted:#5d6d84;--line:#cbd7e5;--ground:#edf3f9;--paper:#fff;--blue:#2563eb;--blue-pale:#eaf2ff;--teal:#0f766e;--teal-pale:#e7f8f5;--violet:#6d28d9;--violet-pale:#f3ecff;--green:#15803d;--green-pale:#eaf8ed;--rose:#be185d;--rose-pale:#ffeaf2;--orange:#b45309;--orange-pale:#fff4e7;--gray-pale:#f8fafc}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--ground);color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}code{padding:.08em .3em;border-radius:3px;background:#e9eff6;color:#183d65;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em}.wrap{width:min(1450px,calc(100% - 32px));margin:auto}
+    header{padding:54px 0 34px;background:#102242;color:#f8fbff;border-bottom:1px solid #20385d}.eyebrow{margin:0 0 10px;color:#9cc0ff;font-size:.77rem;font-weight:850;letter-spacing:.13em;text-transform:uppercase}h1{max-width:850px;margin:0;font-size:clamp(2rem,4.5vw,3.9rem);line-height:1.1;letter-spacing:-.055em}.lead{max-width:800px;margin:17px 0 0;color:#d9e8ff;font-size:1.04rem}.header-note{display:inline-block;margin-top:22px;padding:10px 13px;background:#1b3762;color:#cfdef6;font-size:.84rem}.header-note b{color:#9de8e3}main{padding:32px 0 66px}
+    .intro{display:flex;align-items:end;justify-content:space-between;gap:28px;margin-bottom:19px}.intro h2{margin:0;font-size:clamp(1.35rem,2.4vw,2rem);letter-spacing:-.04em}.intro p{max-width:600px;margin:0;color:var(--muted);font-size:.9rem}.controls{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 18px}.flow-control{min-height:39px;padding:8px 12px;border:1px solid #9db1c9;background:#fff;color:#334155;cursor:pointer;font-size:.84rem;font-weight:800}.flow-control:hover,.flow-control:focus-visible{border-color:var(--blue);outline:3px solid #bfdbfe;outline-offset:2px}.flow-control[aria-pressed="true"]{border-color:var(--blue);background:var(--blue);color:#fff}.legend{display:flex;gap:12px;flex-wrap:wrap;margin:0 0 20px;color:#51617a;font-size:.79rem}.legend i{display:inline-block;width:10px;height:10px;margin-right:4px;border:1px solid;vertical-align:-1px}.legend .lb{background:var(--blue-pale);border-color:var(--blue)}.legend .tg{background:var(--teal-pale);border-color:var(--teal)}.legend .was{background:var(--violet-pale);border-color:var(--violet)}.legend .worker{background:var(--orange-pale);border-color:var(--orange)}
+    .comparison{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.option{min-width:0;border:1px solid #b9c8da;background:var(--paper);box-shadow:0 12px 28px rgba(42,64,94,.08)}.option-head{padding:20px 22px;border-bottom:1px solid var(--line);background:#f8fbff}.option-head .label{display:inline-block;padding:3px 7px;border:1px solid currentColor;color:#1d4ed8;font-size:.7rem;font-weight:850;letter-spacing:.08em;text-transform:uppercase}.option-head h3{margin:8px 0 3px;font-size:1.24rem;letter-spacing:-.03em}.option-head p{margin:0;color:var(--muted);font-size:.84rem}.diagram{padding:22px;overflow:auto}.lane{display:grid;gap:10px;min-width:480px}.node{position:relative;padding:12px 13px;border:1px solid #bfcde0;background:#fff}.node small{display:block;margin-bottom:4px;color:#53647d;font-size:.62rem;font-weight:850;letter-spacing:.08em;text-transform:uppercase}.node strong{display:block;font-size:.91rem;line-height:1.25}.node span{display:block;margin-top:5px;color:var(--muted);font-size:.75rem;line-height:1.3}.node.user{border-top:3px solid #64748b;background:var(--gray-pale)}.node.public-alb{border-top:3px solid var(--blue);background:var(--blue-pale)}.node.target-group{border-top:3px solid var(--teal);background:var(--teal-pale)}.node.nginx{border-top:3px solid #0891b2;background:#e9fbff}.node.private-alb{border-top:3px solid var(--violet);background:var(--violet-pale)}.node.api-was{border-top:3px solid var(--green);background:var(--green-pale)}.node.chat-was{border-top:3px solid var(--rose);background:var(--rose-pale)}.node.worker-node{border-top:3px solid var(--orange);background:var(--orange-pale)}.node.db{border-top:3px solid #64748b;background:var(--gray-pale)}.center{justify-self:center;width:min(270px,100%)}.arrow{display:grid;grid-template-columns:1fr 42px 1fr;align-items:center;min-height:31px;color:#2563eb;font-size:1.45rem;text-align:center}.arrow span{grid-column:2}.arrow small{grid-column:1 / 4;margin-top:-2px;color:#4c6381;font-size:.65rem;font-weight:800;line-height:1.1}.arrow:has(small) span{margin-top:-4px}.breakout{display:grid;grid-template-columns:1fr 25px 1fr;gap:8px;align-items:center}.breakout .node{min-height:103px}.arrow-horizontal{color:#2563eb;font-size:1.25rem;text-align:center}.route-table{display:grid;gap:8px;margin-top:7px}.route-row{display:grid;grid-template-columns:minmax(88px,.7fr) 25px minmax(155px,1fr);gap:7px;align-items:center;padding:10px;border:1px solid #d7e1ed;background:#fbfdff}.route-path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#1e3a5f;font-size:.77rem;font-weight:800}.route-destination{font-size:.78rem;font-weight:800}.route-destination small{display:block;margin-top:2px;color:var(--muted);font-size:.68rem;font-weight:500}.route-row .arrow-horizontal{font-size:1rem}.static-return{margin-top:8px;padding:10px 12px;border-left:3px solid #0891b2;background:#e9fbff;color:#19586b;font-size:.78rem}.static-return b{display:block;margin-bottom:2px}.worker-plane{margin-top:23px;padding-top:18px;border-top:1px dashed #aab8c9}.worker-title{margin:0 0 9px;color:#8a4804;font-size:.73rem;font-weight:850;letter-spacing:.09em;text-transform:uppercase}.worker-row{display:grid;grid-template-columns:1fr 35px 1fr;gap:8px;align-items:center}.worker-row .node{min-height:88px}.worker-row .arrow-horizontal{color:#b45309}.worker-note{margin:10px 0 0;color:#765729;font-size:.76rem}.hidden-resource{margin-top:7px;padding:9px 11px;border:1px dashed #9bb0c6;background:#f8fbff;color:#53647d;font-size:.74rem}.hidden-resource b{color:#264b72}.callout{margin-top:22px;padding:17px 19px;border-left:4px solid #f59e0b;background:#fffbeb;color:#704d13;font-size:.88rem}.callout b{color:#92400e}.compare-table{width:100%;margin-top:22px;border-collapse:collapse;background:#fff;font-size:.87rem}.compare-table th,.compare-table td{padding:13px 14px;border:1px solid #cbd7e5;text-align:left;vertical-align:top}.compare-table thead th{background:#eaf2ff;color:#17365f}.compare-table tbody th{width:18%;background:#f8fafc;color:#334155}.caption{margin:18px 0 0;color:var(--muted);font-size:.78rem;text-align:right}
+    .option[data-focus="static"] .api-route,.option[data-focus="static"] .chat-route,.option[data-focus="api"] .static-route,.option[data-focus="api"] .chat-route,.option[data-focus="chat"] .static-route,.option[data-focus="chat"] .api-route{opacity:.18;filter:grayscale(.35)}.option[data-focus="static"] .static-route,.option[data-focus="api"] .api-route,.option[data-focus="chat"] .chat-route{box-shadow:0 0 0 3px #2563eb}.option[data-focus="static"] .route-row.static-route,.option[data-focus="api"] .route-row.api-route,.option[data-focus="chat"] .route-row.chat-route{border-color:#2563eb;background:#eff6ff}
+    .role-explorer{display:grid;grid-template-columns:245px minmax(0,1fr);gap:0;margin:0 0 22px;border:1px solid #b8c8dc;background:#fff}.role-menu{padding:15px;border-right:1px solid #cbd7e5;background:#f6f9fd}.role-menu p{margin:0 0 9px;color:#52657e;font-size:.72rem;font-weight:850;letter-spacing:.08em;text-transform:uppercase}.role-control{display:block;width:100%;margin:6px 0 0;padding:10px 11px;border:1px solid #c4d0df;background:#fff;color:#324762;cursor:pointer;text-align:left;font-size:.83rem;font-weight:800}.role-control:hover,.role-control:focus-visible{border-color:#2563eb;outline:3px solid #bfdbfe;outline-offset:2px}.role-control[aria-pressed="true"]{border-color:#1d4ed8;background:#eaf2ff;color:#153e81}.role-details{padding:18px 21px}.role-details small{display:block;color:#1d4ed8;font-size:.7rem;font-weight:850;letter-spacing:.09em;text-transform:uppercase}.role-details h3{margin:4px 0 11px;font-size:1.2rem}.role-details-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:#cbd7e5;border:1px solid #cbd7e5}.role-details-grid div{padding:11px;background:#fff}.role-details-grid b{display:block;margin-bottom:4px;color:#495d77;font-size:.67rem;letter-spacing:.06em;text-transform:uppercase}.role-details-grid span{display:block;color:#263d5c;font-size:.79rem;line-height:1.35}.role-hint{margin:11px 0 0;color:#55657d;font-size:.78rem}.node[data-role],.route-table[data-role]{cursor:pointer;transition:opacity .15s ease,filter .15s ease,box-shadow .15s ease}.node[data-role]:hover,.node[data-role]:focus-visible{outline:3px solid #bfdbfe;outline-offset:2px}.role-dim{opacity:.16!important;filter:grayscale(.45)}.role-active{position:relative;z-index:2;opacity:1!important;filter:none!important;box-shadow:0 0 0 3px #2563eb,0 8px 18px rgba(37,99,235,.18)!important}.role-edge{transition:opacity .15s ease,filter .15s ease,color .15s ease}.role-edge.role-active{color:#1d4ed8!important;font-weight:900;filter:none!important}.route-table[data-role].role-active{border:2px solid #2563eb;background:#eff6ff}.route-table[data-role].role-active .route-row{border-color:#9fc0f5}.route-table[data-role].role-active .route-row{opacity:1;filter:none}
+    @media(max-width:1040px){.comparison{grid-template-columns:1fr}.role-details-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:700px){header{padding-top:42px}.intro{display:block}.intro p{margin-top:9px}.role-explorer{grid-template-columns:1fr}.role-menu{border-right:0;border-bottom:1px solid #cbd7e5}.role-details-grid{grid-template-columns:1fr}.diagram{padding:15px}.lane{min-width:420px}.compare-table{font-size:.78rem}.compare-table th,.compare-table td{padding:10px}.caption{text-align:left}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <p class="eyebrow">Video RAG MVP · load balancer comparison</p>
+      <h1>Public ALB와 Private ALB 사이에서<br>요청이 어떻게 갈라지는지 비교</h1>
+      <p class="lead">두 안 모두 Web Server는 공개 진입을 받고, General API WAS와 Chat WAS는 Private ALB 뒤에 둡니다. 아래 버튼으로 정적 화면·API·Chat 경로만 남겨 볼 수 있습니다.</p>
+      <p class="header-note"><b>공통:</b> Analysis Worker는 어느 ALB·Listener·Target Group에도 연결하지 않고 PostgreSQL <code>jobs</code>를 직접 polling합니다.</p>
+    </div>
+  </header>
+  <main class="wrap">
+    <div class="intro"><div><h2>Load Balancer 중심 비교</h2></div><p>안 A는 NCP 리소스 이름까지, 안 B는 발표에서 먼저 보여줄 요청 전달 단계까지 보여줍니다.</p></div>
+    <div class="controls" role="group" aria-label="강조할 요청 경로"><button class="flow-control" type="button" data-focus="all" aria-pressed="true">전체 경로</button><button class="flow-control" type="button" data-focus="static" aria-pressed="false">정적 UI <code>/</code></button><button class="flow-control" type="button" data-focus="api" aria-pressed="false">API <code>/api/*</code></button><button class="flow-control" type="button" data-focus="chat" aria-pressed="false">Chat <code>/chat</code></button></div>
+    <section class="role-explorer" aria-label="Load Balancer 역할 선택 설명">
+      <div class="role-menu"><p>역할을 선택하세요</p><button class="role-control" type="button" data-role-select="public-alb" aria-pressed="true">01 · Public ALB</button><button class="role-control" type="button" data-role-select="web" aria-pressed="false">02 · Web <code>web-tg</code></button><button class="role-control" type="button" data-role-select="nginx" aria-pressed="false">03 · Nginx Web Server</button><button class="role-control" type="button" data-role-select="private-alb" aria-pressed="false">04 · Private ALB</button></div>
+      <div class="role-details" aria-live="polite"><small id="role-step">01 · public ingress</small><h3 id="role-title">Public ALB · 외부 HTTPS의 단일 진입점</h3><div class="role-details-grid"><div><b>입력</b><span id="role-input">사용자 브라우저의 HTTPS :443 요청</span></div><div><b>판단 / 책임</b><span id="role-decision">TLS 종료와 Listener Rule 적용 후 Web Target Group 선택</span></div><div><b>출력</b><span id="role-output"><code>web-tg</code>에 HTTP 요청 forward</span></div><div><b>하지 않는 일</b><span id="role-not">API·Chat WAS를 직접 선택하거나 Worker 작업을 실행하지 않음</span></div></div><p class="role-hint" id="role-hint">아래 두 안의 파란 테두리와 화살표가 이 역할이 담당하는 요청 구간입니다. 각 구성요소 카드도 직접 눌러 선택할 수 있습니다.</p></div>
+    </section>
+    <div class="legend"><span><i class="lb"></i>ALB / Listener</span><span><i class="tg"></i>Target Group</span><span><i class="was"></i>Private WAS</span><span><i class="worker"></i>ALB 밖의 Worker</span></div>
+    <section class="comparison" aria-label="두 Load Balancer 경로 비교">
+      <article class="option" data-option="a" data-focus="all">
+        <header class="option-head"><span class="label">안 A · 운영 리소스 상세도</span><h3>Target Group까지 모두 표시</h3><p>ALB Listener가 어떤 Target Group을 forward하고, Nginx가 어느 Private ALB 규칙을 타는지 그대로 드러냅니다.</p></header>
+        <div class="diagram">
+          <div class="lane">
+            <div class="node user center"><small>Client</small><strong>사용자 브라우저</strong><span>HTTPS 요청</span></div>
+            <div class="arrow static-route api-route chat-route role-edge" data-role-edge="public-alb"><span>↓</span><small>HTTPS :443</small></div>
+            <div class="node public-alb center" data-role="public-alb" tabindex="0"><small>Public subnet · listener :443</small><strong>Public ALB</strong><span>default action: <code>forward web-tg</code></span></div>
+            <div class="arrow static-route api-route chat-route role-edge" data-role-edge="public-alb"><span>↓</span><small>Target Group 선택</small></div>
+            <div class="node target-group center" data-role="web" tabindex="0"><small>Public ALB target group</small><strong>web-tg</strong><span>Nginx Web Server만 health check</span></div>
+            <div class="arrow static-route api-route chat-route role-edge" data-role-edge="web"><span>↓</span><small>Private App subnet</small></div>
+            <div class="node nginx center" data-role="nginx" tabindex="0"><small>Web server</small><strong>Nginx</strong><span>정적 UI 반환 · 내부 요청 proxy</span></div>
+            <div class="static-return static-route role-edge" data-role-edge="nginx"><b><code>/</code> 정적 UI</b>Nginx가 직접 파일을 반환합니다. Private ALB를 통과하지 않습니다.</div>
+            <div class="arrow api-route chat-route role-edge" data-role-edge="nginx"><span>↓</span><small>내부 proxy</small></div>
+            <div class="node private-alb center" data-role="private-alb" tabindex="0"><small>Private subnet · internal listener</small><strong>Private ALB</strong><span>Host Rule로 API · Chat Target Group 분기</span></div>
+            <div class="route-table" data-role="private-alb" tabindex="0">
+              <div class="route-row api-route"><span class="route-path">Host: api.internal</span><span class="arrow-horizontal">→</span><span class="route-destination"><code>api-tg</code> <small>General API WAS로 forward</small></span></div>
+              <div class="route-row chat-route"><span class="route-path">Host: chat.internal</span><span class="arrow-horizontal">→</span><span class="route-destination"><code>chat-tg</code> <small>Chat WAS로 forward</small></span></div>
+            </div>
+            <div class="breakout">
+              <div class="api-route"><div class="node target-group"><small>Private ALB target group</small><strong>api-tg</strong><span>General API WAS health check</span></div><div class="arrow"><span>↓</span><small>forward</small></div><div class="node api-was"><small>Private App subnet</small><strong>General API WAS</strong><span>영상 등록 · 상태 SSE · metadata</span></div></div>
+              <div class="arrow-horizontal api-route chat-route">│</div>
+              <div class="chat-route"><div class="node target-group"><small>Private ALB target group</small><strong>chat-tg</strong><span>Chat WAS health check</span></div><div class="arrow"><span>↓</span><small>forward</small></div><div class="node chat-was"><small>Private App subnet</small><strong>Chat WAS</strong><span>RAG · CLOVA Chat stream</span></div></div>
+            </div>
+          </div>
+          <div class="worker-plane"><p class="worker-title">ALB 경로 밖 · 비동기 분석</p><div class="worker-row"><div class="node worker-node"><small>No listener · no target group</small><strong>Analysis Worker</strong><span>외부 HTTP를 받지 않음</span></div><div class="arrow-horizontal">→</div><div class="node db"><small>Private Data subnet</small><strong>PostgreSQL jobs</strong><span><code>queued</code> poll / claim</span></div></div><p class="worker-note">Worker는 Public ALB, Private ALB, <code>web-tg</code>, <code>api-tg</code>, <code>chat-tg</code> 모두에 등록하지 않습니다.</p></div>
+        </div>
+      </article>
+      <article class="option" data-option="b" data-focus="all">
+        <header class="option-head"><span class="label">안 B · 발표용 전달 흐름</span><h3>서버 간 전달을 먼저 표시</h3><p>Target Group 이름은 본 흐름에서 감추고, Public ALB → Nginx → Private ALB의 책임 분리를 먼저 읽게 합니다.</p></header>
+        <div class="diagram">
+          <div class="lane">
+            <div class="node user center"><small>Client</small><strong>사용자 브라우저</strong><span>HTTPS 요청</span></div>
+            <div class="arrow static-route api-route chat-route role-edge" data-role-edge="public-alb"><span>↓</span><small>HTTPS :443</small></div>
+            <div class="node public-alb center" data-role="public-alb" tabindex="0"><small>Public subnet</small><strong>Public ALB</strong><span>Web Server에만 전달</span></div>
+            <div class="arrow static-route api-route chat-route role-edge" data-role-edge="public-alb web"><span>↓</span><small>Private subnet</small></div>
+            <div class="node nginx center" data-role="nginx" tabindex="0"><small>Web server</small><strong>Nginx Web Server</strong><span>정적 UI 반환 · 내부 proxy</span></div>
+            <div class="static-return static-route role-edge" data-role-edge="nginx"><b><code>/</code> 정적 UI</b>Nginx가 직접 반환합니다. Private ALB로 가지 않습니다.</div>
+            <div class="arrow api-route chat-route role-edge" data-role-edge="nginx"><span>↓</span><small><code>/api/*</code> · <code>/chat</code>만 내부 전달</small></div>
+            <div class="node private-alb center" data-role="private-alb" tabindex="0"><small>Internal listener rules</small><strong>Private ALB</strong><span>API와 Chat 요청을 분기</span></div>
+            <div class="breakout">
+              <div class="api-route"><div class="arrow"><span>↓</span><small><code>/api/*</code></small></div><div class="node api-was"><small>Private App subnet</small><strong>General API WAS</strong><span>영상 등록 · 상태 SSE</span></div></div>
+              <div class="arrow-horizontal api-route chat-route">│</div>
+              <div class="chat-route"><div class="arrow"><span>↓</span><small><code>/chat, /chat/*</code></small></div><div class="node chat-was"><small>Private App subnet</small><strong>Chat WAS</strong><span>RAG · CLOVA Chat stream</span></div></div>
+            </div>
+            <div class="hidden-resource" data-role="web" tabindex="0"><b>그림에서 감춘 실제 리소스</b> Public ALB에는 <code>web-tg</code>, Private ALB에는 <code>api-tg</code>와 <code>chat-tg</code>가 여전히 필요합니다. 안 B는 이 이름을 생략한 표현입니다.</div>
+          </div>
+          <div class="worker-plane"><p class="worker-title">ALB 경로 밖 · 비동기 분석</p><div class="worker-row"><div class="node worker-node"><small>No listener · no target group</small><strong>Analysis Worker</strong><span>외부 HTTP를 받지 않음</span></div><div class="arrow-horizontal">→</div><div class="node db"><small>Private Data subnet</small><strong>PostgreSQL jobs</strong><span><code>queued</code> poll / claim</span></div></div><p class="worker-note">Worker의 분석 실행은 사용자 요청 경로와 독립적입니다. ALB 규칙이나 Target Group을 추가할 필요가 없습니다.</p></div>
+        </div>
+      </article>
+    </section>
+    <aside class="callout"><b>핵심 판단</b> 안 A와 안 B는 Target Group을 실제로 쓰느냐의 차이가 아닙니다. Private ALB가 API·Chat WAS로 분기하려면 두 안 모두 Target Group이 필요합니다. 안 A는 운영·장애 대응용, 안 B는 발표 첫 화면용으로 쓰는 것이 적합합니다.</aside>
+    <table class="compare-table"><thead><tr><th>비교 기준</th><th>안 A</th><th>안 B</th></tr></thead><tbody><tr><th>그림의 중심</th><td>ALB Listener → Target Group → Target</td><td>Public ALB → Nginx → Private ALB</td></tr><tr><th>Target Group 표기</th><td><code>web-tg</code>, <code>api-tg</code>, <code>chat-tg</code>를 전부 표시</td><td>흐름에서는 생략하지만 실제 리소스로는 존재</td></tr><tr><th>정적 화면 <code>/</code></th><td colspan="2">Nginx가 직접 반환. Private ALB를 통과하지 않음.</td></tr><tr><th>API / Chat</th><td colspan="2">Nginx가 내부 요청만 Private ALB로 전달. Private ALB Listener Rule이 API와 Chat Target Group을 선택.</td></tr><tr><th>Worker</th><td colspan="2">ALB·Target Group 미연결. PostgreSQL <code>jobs</code>를 polling하여 분석 작업을 가져감.</td></tr></tbody></table>
+    <p class="caption">Video RAG MVP · 별도 비교 문서 · 현재 구현과 운영 목표는 실제 NCP Listener / Target Group 설정 시 다시 대조해야 합니다.</p>
+  </main>
+  <script>
+    const controls = document.querySelectorAll('.flow-control');
+    const options = document.querySelectorAll('.option');
+    const roleControls = document.querySelectorAll('.role-control');
+    const roleItems = document.querySelectorAll('[data-role]');
+    const roleEdges = document.querySelectorAll('[data-role-edge]');
+    const roleCopy = {
+      'public-alb':{step:'01 · public ingress',title:'Public ALB · 외부 HTTPS의 단일 진입점',input:'사용자 브라우저의 HTTPS :443 요청',decision:'TLS 종료와 Listener Rule 적용 후 Web Target Group 선택',output:'web-tg에 HTTP 요청 forward',not:'API·Chat WAS를 직접 선택하거나 Worker 작업을 실행하지 않음',hint:'Public ALB는 외부에 공개되는 유일한 Load Balancer입니다. 두 그림의 사용자 → Public ALB → Web 경로가 강조됩니다.'},
+      web:{step:'02 · web target group',title:'Web · web-tg가 Nginx 상태를 관리',input:'Public ALB가 forward한 HTTP 요청',decision:'Nginx Web Server의 health check 결과를 기준으로 정상 target만 유지',output:'정상 Nginx target으로 요청 전달',not:'정적 파일을 반환하거나 /api·/chat 경로를 직접 분기하지 않음',hint:'안 A는 web-tg를 별도 카드로 표시합니다. 안 B는 발표용 단순화 때문에 이름만 감췄지만, 실제 Public ALB에는 같은 Target Group이 필요합니다.'},
+      nginx:{step:'03 · web routing',title:'Nginx Web Server · 정적 UI와 내부 proxy의 경계',input:'web-tg를 거쳐 도착한 브라우저 요청',decision:'경로를 보고 /는 정적 UI로, /api/*와 /chat·/chat/*은 내부 요청으로 판단',output:'정적 파일 반환 또는 Host header를 붙여 Private ALB로 proxy',not:'API RAG 로직·분석 작업·Target Group health check를 수행하지 않음',hint:'Nginx가 공개 요청 흐름과 API·Chat WAS 사이를 구분합니다. 정적 UI는 여기서 끝나고, API·Chat만 Private ALB로 갑니다.'},
+      'private-alb':{step:'04 · private routing',title:'Private ALB · 내부 API와 Chat Target Group의 분기점',input:'Nginx가 내부용 Host header와 함께 보낸 요청',decision:'Host: api.internal 또는 Host: chat.internal Listener Rule 적용',output:'api-tg 또는 chat-tg로 forward',not:'인터넷 HTTPS를 직접 받거나 정적 UI를 제공하지 않음',hint:'Private ALB는 VPC 내부 요청만 받습니다. 안 A에는 Listener Rule과 Target Group 이름이, 안 B에는 API·Chat WAS 방향만 표시됩니다.'}
+    };
+    const roleFields = {step:document.querySelector('#role-step'),title:document.querySelector('#role-title'),input:document.querySelector('#role-input'),decision:document.querySelector('#role-decision'),output:document.querySelector('#role-output'),not:document.querySelector('#role-not'),hint:document.querySelector('#role-hint')};
+    function focusRole(role){
+      const info = roleCopy[role];
+      roleControls.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.roleSelect === role)));
+      roleItems.forEach(item => { const active = item.dataset.role === role; item.classList.toggle('role-active', active); item.classList.toggle('role-dim', !active); });
+      roleEdges.forEach(edge => { const active = edge.dataset.roleEdge.split(' ').includes(role); edge.classList.toggle('role-active', active); edge.classList.toggle('role-dim', !active); });
+      Object.entries(roleFields).forEach(([key, field]) => { field.textContent = info[key]; });
+    }
+    controls.forEach(control => control.addEventListener('click', () => {
+      const focus = control.dataset.focus;
+      controls.forEach(button => button.setAttribute('aria-pressed', String(button === control)));
+      options.forEach(option => { option.dataset.focus = focus; });
+    }));
+    roleControls.forEach(control => control.addEventListener('click', () => focusRole(control.dataset.roleSelect)));
+    roleItems.forEach(item => {
+      item.addEventListener('click', () => focusRole(item.dataset.role));
+      item.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); focusRole(item.dataset.role); } });
+    });
+    focusRole('public-alb');
+  </script>
+</body>
+</html>

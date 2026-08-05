@@ -1,17 +1,14 @@
-from contextlib import asynccontextmanager
 import asyncio
 import json
 from pathlib import Path
 import time
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
-from .config import SESSION_COOKIE_NAME, SESSION_COOKIE_SECURE, SESSION_MAX_AGE_SECONDS
-from .db import connection, initialize
+from .config import CHAT_PUBLIC_ORIGIN
+from .db import connection, is_postgres, is_unique_violation
 from .dependencies import current_workspace
-from .routers.chat import router as chat_router
 from .schemas import ChannelCreate, SearchRequest, TranscriptImport, VideoCreate, WorkspaceConnect
 from .services import (
     analysis_event_state,
@@ -21,57 +18,14 @@ from .services import (
     import_transcript,
     upsert_video,
 )
-from .workspaces import create_guest_workspace, create_session, find_workspace, session_workspace
+from .workspaces import create_guest_workspace, create_session, find_workspace
+from .web import create_web_app
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    initialize()
-    yield
-
-
-app = FastAPI(title="Video RAG MVP", version="0.2.0", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=".*",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = create_web_app(title="Video RAG API", version="0.2.0")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 SSE_POLL_INTERVAL_SECONDS = 1
 SSE_HEARTBEAT_SECONDS = 20
-
-
-def set_session_cookie(response: Response, token: str):
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=token,
-        max_age=SESSION_MAX_AGE_SECONDS,
-        httponly=True,
-        secure=SESSION_COOKIE_SECURE,
-        samesite="lax",
-        path="/",
-    )
-
-
-@app.middleware("http")
-async def workspace_session(request: Request, call_next):
-    if request.url.path == "/auth/workspace":
-        response = await call_next(request)
-        if getattr(request.state, "new_session_token", None):
-            set_session_cookie(response, request.state.new_session_token)
-        return response
-
-    workspace = session_workspace(request.cookies.get(SESSION_COOKIE_NAME))
-    if workspace is None:
-        workspace = create_guest_workspace()
-        request.state.new_session_token = create_session(workspace["id"])
-    request.state.workspace = workspace
-    response = await call_next(request)
-    if getattr(request.state, "new_session_token", None):
-        set_session_cookie(response, request.state.new_session_token)
-    return response
 
 
 def required_channel(channel_id: int, user_id: int):
@@ -98,12 +52,20 @@ def required_video(video_id: int, user_id: int):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "queue": "sqlite job table", "mode": "local"}
+    if is_postgres():
+        return {"status": "ok", "queue": "postgresql jobs table", "mode": "postgresql"}
+    return {"status": "ok", "queue": "sqlite job table", "mode": "sqlite"}
 
 
 @app.get("/", include_in_schema=False)
 def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/runtime-config.js", include_in_schema=False)
+def runtime_config():
+    body = "window.VIDEO_RAG_CHAT_ORIGIN = " + json.dumps(CHAT_PUBLIC_ORIGIN) + ";\n"
+    return Response(body, media_type="application/javascript", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/auth/me")
@@ -139,7 +101,7 @@ def create_channel(payload: ChannelCreate, request: Request):
                 (workspace["id"], str(payload.url), payload.name),
             ).fetchone()
         except Exception as exc:
-            if "UNIQUE constraint failed" in str(exc):
+            if is_unique_violation(exc):
                 raise HTTPException(status_code=409, detail="channel already exists in this workspace")
             raise
     return dict(row)
@@ -254,6 +216,3 @@ def recommendations(payload: SearchRequest, request: Request):
         "items": find_metadata(workspace["id"], payload.query, payload.limit),
         "notice": "추천은 제목과 영상 설명의 embedding 유사도 기반이며 영상 내용을 검증하지 않습니다.",
     }
-
-
-app.include_router(chat_router)

@@ -4,12 +4,13 @@
 
 ## 결론
 
-이 서비스는 기능마다 독립 배포물을 무한히 늘리는 MSA로 가지 않는다. 다만 운영에서는 **영상 API, Chat, Worker**를 세 실행 역할로 둔다. `chat.<domain>`은 Load Balancer Host Header 규칙으로 별도 Chat Target Group에만 보낸다.
+이 서비스는 기능마다 독립 배포물을 무한히 늘리는 MSA로 가지 않는다. 다만 Web-WAS 운영에서는 **Web, 영상 API, Chat, Worker**를 네 실행 역할로 둔다. 공개 요청은 Web Server까지만 도달하고, Nginx가 내부 Private ALB를 거쳐 API와 Chat으로 분기한다.
 
 | 역할 | 시작 명령 | 책임 | 외부 공개 |
 | --- | --- | --- | --- |
-| API | `uvicorn app.main:app` | 로그인/작업공간, 채널·영상 등록, 작업 등록, 메타데이터 검색, 분석 상태 SSE | `api.<domain>` Load Balancer를 통한 HTTPS만 |
-| Chat | NCP 운영용 별도 Chat Server / Target Group | `POST /chat`, 작업공간 검증, RAG 검색, CLOVA Studio Chat 호출 | `chat.<domain>` Load Balancer를 통한 HTTPS만 |
+| Web | Nginx | 정적 화면 제공, `/api/*`·`/chat`을 Private ALB로 reverse proxy | Public ALB를 통한 HTTPS만 |
+| API | `uvicorn app.main:app` | 로그인/작업공간, 채널·영상 등록, 작업 등록, 메타데이터 검색, 분석 상태 SSE | Private ALB의 API Target Group만 |
+| Chat | `uvicorn app.chat_main:app` | `POST /chat`, 작업공간 검증, RAG 검색, CLOVA Studio Chat 호출 | Private ALB의 Chat Target Group만 |
 | Worker | `python -m app.worker` | 채널 스캔, `yt-dlp`, 자막/STT, 청킹, embedding, 파일 저장 | 없음 |
 
 메타데이터 검색은 API가 PostgreSQL을 읽어 바로 반환하는 기능이다. 별도 검색 서버를 만들지 않는다. 분석 대기열이 길면 API가 아니라 Worker를 먼저 늘린다.
@@ -18,36 +19,41 @@
 
 | 항목 | 현재 로컬 | NCP 운영 목표 |
 | --- | --- | --- |
-| API / Chat | `app/main.py`에 API와 `app/routers/chat.py` router가 함께 등록됨 | `api.<domain>` API Target Group과 `chat.<domain>` Chat Target Group을 별도 Server로 운영 |
+| Web / API / Chat | 로컬 Compose에서는 API·Chat을 포트로 분리하고 UI가 직접 호출 | Web Server가 정적 화면과 reverse proxy를 맡고, Private ALB가 API·Chat Target Group으로 분기 |
 | Worker | `app/worker.py` 단일 프로세스 | 동일 이미지의 Worker를 독립적으로 증설 |
-| 작업 큐 | SQLite `jobs` 테이블 | Cloud DB for PostgreSQL `jobs` + `FOR UPDATE SKIP LOCKED` |
-| RAG 벡터 | SQLite JSON 문자열 | PostgreSQL + `pgvector` |
-| 파일 | `data/downloads/` | private Object Storage, DB에는 object key만 저장 |
+| 작업 큐 | SQLite `jobs` 테이블 | `DATABASE_URL`로 Cloud DB for PostgreSQL `jobs` 전환, Worker가 `FOR UPDATE SKIP LOCKED`로 선점 |
+| RAG 벡터 | SQLite JSON 문자열 | `DATABASE_URL` 모드의 PostgreSQL `vector` column + HNSW index |
+| 파일 | `data/downloads/` | private Object Storage에 VTT·M4A·STT 원본 JSON·정규화 JSON 저장, DB `analysis_artifacts`에는 immutable object key 저장 |
 | AI | mock 또는 CLOVA Studio | CLOVA Studio, 필요 시 CLOVA Speech |
 
-현재 `app/worker.py`의 `claim_job()`은 SQLite에서 단일 Worker가 작업을 가져오는 로컬 구현이며, `POST /chat`도 `app/routers/chat.py`를 통해 같은 FastAPI 프로세스에서 실행된다. 이 문서의 PostgreSQL 큐, Object Storage 업로드, CLOVA Speech 장문 인식, **별도 Chat Server 프로세스와 `chat.<domain>` 배포**는 NCP 운영 목표이며 아직 코드에 적용되지 않았다.
+`DATABASE_URL`이 비어 있으면 `app/worker.py`의 `claim_job()`은 SQLite에서 단일 Worker가 작업을 가져오는 로컬 구현이다. Cloud DB for PostgreSQL URL을 주입하면 같은 코드가 `pgvector` 스키마를 만들고 Worker가 `FOR UPDATE SKIP LOCKED`로 작업을 선점한다. `POST /chat`은 `app/routers/chat.py`를 공유하지만 `app.chat_main:app`이라는 별도 ASGI 프로세스로 실행한다. Nginx와 Private ALB를 통한 단일 도메인 reverse proxy는 NCP 운영 목표이며, 현재 로컬 Compose의 직접 포트 호출과 구분한다. Worker에는 Object Storage와 CLOVA Speech adapter가 구현되어 있으며, 해당 비밀값은 Worker 런타임에만 주입한다.
 
 ## 전체 구조
 
 ~~~mermaid
 flowchart LR
-    U[사용자 브라우저] --> LB[Load Balancer<br/>Host Header 분기]
+    U[사용자 브라우저] --> PLB[Public Application LB<br/>HTTPS]
     subgraph VPC[NCP VPC]
       subgraph Public[Public LB Subnet]
-        LB
+        PLB
       end
       subgraph NatPublic[Public NAT Subnet]
         NAT[NAT Gateway]
       end
       subgraph App[Private App Subnet]
-        API[FastAPI API<br/>api.&lt;domain&gt;]
-        CHAT[Chat Server<br/>chat.&lt;domain&gt;]
+        WEB[Web Server<br/>Nginx · static + proxy]
+        ILB[Private Application LB<br/>Host Header 분기]
+        API[General API WAS]
+        CHAT[Chat WAS]
         W[Analysis Worker]
         SCH[채널 스케줄러<br/>Worker cron]
       end
       subgraph Data[Private Data Subnet]
         DB[(Cloud DB for PostgreSQL<br/>서비스 DB · jobs · pgvector)]
       end
+      WEB -->|/api/* · /chat| ILB
+      ILB -->|api.internal| API
+      ILB -->|chat.internal| CHAT
       API --> DB
       CHAT --> DB
       API --> NAT
@@ -56,8 +62,7 @@ flowchart LR
       W --> DB
       W --> NAT
     end
-    LB -->|api.&lt;domain&gt;| API
-    LB -->|chat.&lt;domain&gt;| CHAT
+    PLB -->|Web Target Group| WEB
     NAT --> IGW[Internet Gateway]
     IGW --> YT[YouTube]
     IGW --> STUDIO[CLOVA Studio<br/>Embedding · Chat]
@@ -70,10 +75,11 @@ flowchart LR
 
 ### 네트워크 원칙
 
-- 공개 인바운드는 `사용자 → Load Balancer` 하나다. Host Header가 `api.<domain>`이면 API Target Group, `chat.<domain>`이면 Chat Target Group으로 보낸다. Worker와 PostgreSQL에는 public IP나 공개 포트를 열지 않는다.
+- 공개 인바운드는 `사용자 → Public ALB → Web Server` 하나다. Public ALB의 Target Group은 Web Server만 가진다. Worker와 PostgreSQL에는 public IP나 공개 포트를 열지 않는다.
+- Web Server의 Nginx는 정적 화면을 반환하고, `/api/*`는 `Host: api.internal`으로, `/chat`과 `/chat/stream`은 `Host: chat.internal`으로 Private ALB에 전달한다. Private ALB가 이 Host Header 규칙으로 API·Chat Target Group을 선택한다.
 - Public LB Subnet과 Public NAT Subnet은 분리한다. NAT 전용 subnet에는 NAT Gateway만 두고, 애플리케이션 서버를 배치하지 않는다.
 - 채널 스케줄러는 Private App subnet의 Worker cron으로 실행한다. public IP·공개 endpoint·Load Balancer 경로 없이 PostgreSQL `jobs`에만 `scan_channel` 작업을 등록한다.
-- API·Chat Server·Worker만 PostgreSQL ACG 접근을 허용한다.
+- API·Chat Server·Worker만 PostgreSQL ACG 접근을 허용한다. Web Server는 PostgreSQL 접근 권한이 없다.
 - Private App subnet의 `0.0.0.0/0` route target은 NAT Gateway다. API·Chat Server·Worker가 YouTube·CLOVA API를 호출할 때만 `Private App → Public NAT Subnet → Internet Gateway` outbound 통신을 허용한다.
 - Private Data subnet의 PostgreSQL에는 현재 외부 호출이 없으므로 `LOCAL` route만 둔다. DB에 인터넷 기본 경로를 추가하지 않는다.
 - Object Storage 버킷은 private으로 유지한다. 원본 VTT·오디오·STT 결과는 Object Storage에, 검색용 청크와 embedding은 PostgreSQL에 둔다.
@@ -83,7 +89,7 @@ flowchart LR
 | --- | --- | --- |
 | Public LB Subnet | Internet Gateway | Load Balancer의 공개 HTTPS 수신 |
 | Public NAT Subnet | Internet Gateway | NAT Gateway의 외부 송신 |
-| Private App Subnet | NAT Gateway | API·Chat Server·Worker의 YouTube·CLOVA 호출 |
+| Private App Subnet | NAT Gateway | Web·API·Chat·Worker 배치, API·Chat·Worker의 외부 호출 |
 | Private Data Subnet | 없음 | PostgreSQL 내부 통신만 허용 |
 
 ## 세 가지 서비스 흐름은 서로 다르다
@@ -130,12 +136,14 @@ flowchart LR
 - 정규화된 자막 구간은 시간 정보와 함께 CLOVA Studio Embedding으로 vector를 만들고, 원문·시간·vector를 PostgreSQL에 저장한다.
 - 스케줄러는 `analyze_video` 작업을 만들지 않는다. 사용자가 선택한 영상만 이 흐름을 탄다.
 
-### 3. RAG 질문: `chat.<domain>` → Chat Server → 검색 → CLOVA Studio Chat
+### 3. RAG 질문: Web Nginx → Private ALB → Chat WAS → 검색 → CLOVA Studio Chat
 
 ~~~mermaid
 flowchart LR
-    B[사용자 질문] --> L[Load Balancer<br/>Host: chat.&lt;domain&gt;]
-    L --> A[Chat Server]
+    B[사용자 질문] --> P[Public ALB]
+    P --> W[Web Server Nginx]
+    W -->|/chat · Host: chat.internal| L[Private ALB]
+    L --> A[Chat WAS]
     A -->|NAT 경유 질문 embedding 요청| E[CLOVA Studio Embedding]
     E -->|질문 vector 반환| A
     A -->|Top-K 검색| P[(pgvector)]
@@ -145,12 +153,12 @@ flowchart LR
     A --> R[답변 + 실제 재생 시간 링크]
 ~~~
 
-1. 브라우저가 `chat.<domain>`의 `POST /chat`으로 질문을 보낸다. Load Balancer가 Chat Target Group으로 분기한다.
+1. 브라우저가 단일 서비스 도메인의 `POST /chat`으로 질문을 보낸다. Public ALB는 Web Server로 보내고, Nginx가 `Host: chat.internal`을 설정해 Private ALB의 Chat Target Group으로 전달한다.
 2. Chat Server가 CLOVA Studio Embedding으로 질문 vector를 만들고, 현재 작업공간의 분석 완료 자막 구간만 `pgvector`에서 Top-K 검색한다.
 3. Chat Server가 검색 결과의 **원문 자막과 시간**을 프롬프트 근거로 구성해 CLOVA Studio Chat에 전달한다. vector 숫자 자체를 Chat 모델에 보내는 것은 아니다.
-4. Chat 모델이 자연어 답변을 만들고, Chat Server가 근거 구간의 실제 재생 시간 링크와 함께 반환한다.
+4. Chat 모델이 자연어 답변을 만들고, Chat Server가 `/chat`에서는 완료 응답과 근거 링크를, `/chat/stream`에서는 `evidence → token* → done` SSE로 반환한다.
 
-이 흐름은 Worker를 거치지 않으며, CLOVA Speech도 사용하지 않는다. CLOVA Speech는 선택 영상에 자막이 없을 때 음성을 텍스트로 바꾸는 STT 서비스일 뿐 챗봇이 아니다. 현재 로컬 소스에서는 Chat Server가 아직 독립 프로세스가 아니라 `app/routers/chat.py` router이므로, 이 분기는 NCP 배포 시 별도 ASGI 프로세스와 Target Group으로 구현해야 한다.
+이 흐름은 Worker를 거치지 않으며, CLOVA Speech도 사용하지 않는다. CLOVA Speech는 선택 영상에 자막이 없을 때 음성을 텍스트로 바꾸는 STT 서비스일 뿐 챗봇이 아니다. Chat Server는 `app.chat_main:app`으로 독립 실행하며, `app/routers/chat.py` router를 공유한다. Nginx는 채팅 스트림에서 응답 버퍼링을 끄고 idle timeout보다 짧은 heartbeat를 그대로 전달해야 한다.
 
 ### 분석 상태 SSE: Worker → DB 상태 갱신 → FastAPI → Browser
 
@@ -241,14 +249,14 @@ RETURNING j.*;
 
 | 시점 | 서비스 | 이 프로젝트에서의 책임 |
 | --- | --- | --- |
-| 지금 | VPC, Subnet, ACG | 공개 진입점과 private API/Worker/DB를 분리 |
-| 지금 | Server | API 1대, Worker 1대부터 시작 |
+| 지금 | VPC, Subnet, ACG | Public ALB, Web, Private ALB, API/Chat/Worker, DB를 역할별로 분리 |
+| 지금 | Server | Web 1대, API 1대, Chat 1대, Worker 1대부터 시작 |
 | 지금 | Cloud DB for PostgreSQL | 서비스 데이터, `jobs`, `pgvector` |
 | 지금 | Object Storage | VTT·오디오·STT 결과의 private 보관 |
 | 지금 | CLOVA Studio | 분석·질문 embedding, 자막 근거 기반 Chat 답변 |
 | 자막 없을 때 | CLOVA Speech | 선택 영상 오디오의 STT. 챗봇이나 RAG 질문에는 사용하지 않음 |
 | 지금 | Cloud Log Analytics, Cloud Insight | 오류, 분석 적체, 처리 시간 관찰 |
-| 필요 시 | Load Balancer, Auto Scaling | API 인스턴스가 2대 이상이거나 공개 요청이 늘 때 |
+| 지금 | Application Load Balancer | Public ALB는 Web Target Group, Private ALB는 API·Chat Target Group으로 분기 |
 | 필요 시 | Cloud DB for Redis | PostgreSQL 큐로 우선순위·지연 재시도를 관리하기 어려울 때 Redis Streams 검토 |
 | 보류 | Cloud Data Streaming Service | 다수 Consumer와 높은 이벤트 처리량이 필요한 Kafka 단계 |
 
@@ -259,22 +267,51 @@ Cloud DB for PostgreSQL은 관리형 PostgreSQL과 `pgvector` 확장을 제공�
 - [Cloud Functions: 지원 트리거](https://guide.ncloud-docs.com/docs/en/cloudfunctions-spec)
 - [Cloud Data Streaming Service: 구성 개념](https://guide.ncloud-docs.com/docs/en/cdss-info)
 
-## Load Balancer는 하나, Target Group은 API·Chat으로 둘로 나눈다
+## Application Load Balancer는 Public 1개 + Private 1개다
 
-사용자 요청용 Application Load Balancer는 하나만 둔다. 다만 이미 분리한 도메인을 기준으로 API와 Chat의 Target Group은 분리한다.
+Public ALB는 Web Server로만, Private ALB는 API·Chat WAS로만 요청을 보낸다. Worker와 스케줄러는 어느 Target Group에도 넣지 않는다.
 
-| 들어오는 경로 | Load Balancer 처리 | 도착 대상 |
-| --- | --- | --- |
-| `chat.<domain>`의 `POST /chat` | HTTPS listener의 Host Header = `chat.<domain>` | Chat Server Target Group |
-| `api.<domain>`의 `POST /videos/{id}/analyze` | HTTPS listener의 Host Header = `api.<domain>` | FastAPI API Target Group |
-| `api.<domain>`의 `POST /channels/{id}/scan` | HTTPS listener의 Host Header = `api.<domain>` | FastAPI API Target Group |
-| Private App subnet 채널 스케줄러의 주기 실행 | Load Balancer를 통과하지 않음 | PostgreSQL에 `scan_channel` 작업 등록 |
+| 구간 | Load Balancer 규칙 | Target Group | 도착 대상 |
+| --- | --- | --- | --- |
+| 인터넷 HTTPS | Public ALB 기본 규칙 | `web-tg` | Web Server (Nginx) |
+| Web의 `/api/*` proxy | Private ALB `Host Header = api.internal` | `api-tg` | General API WAS |
+| Web의 `/chat`, `/chat/stream` proxy | Private ALB `Host Header = chat.internal` | `chat-tg` | Chat WAS |
+| 채널 스케줄러 주기 실행 | Load Balancer를 통과하지 않음 | 없음 | PostgreSQL에 `scan_channel` 작업 등록 |
 
-스케줄러는 외부 사용자의 HTTP 요청을 받는 서비스가 아니다. Private App subnet의 Worker cron이 내부 DB에 작업만 등록하므로, public IP·스케줄러 전용 Load Balancer·Target Group을 만들지 않는다.
+Nginx는 `/api/` prefix를 제거해 General API의 기존 루트 endpoint로 전달하고, `/chat`은 경로를 유지해 Chat WAS로 전달한다. `POST /chat/stream`에는 `proxy_buffering off`를 적용한다. 브라우저는 단일 서비스 도메인만 사용하므로, 서브도메인 간 CORS·쿠키 공유는 필요하지 않다.
 
-NCP Application Load Balancer는 Host Header와 Path Pattern 조건으로 서로 다른 Target Group에 분기할 수 있다. 따라서 `api.<domain>`과 `chat.<domain>`은 Load Balancer를 두 대로 나누지 않고 하나의 HTTPS listener에서 Host Header 규칙만 다르게 둔다. Chat의 CPU·동시 연결·배포 주기를 API와 독립적으로 조절할 수 있다. [Application Load Balancer 규칙](https://guide.ncloud-docs.com/docs/en/loadbalancer-application-vpc)
+NCP Application Load Balancer는 Public IP 또는 Private IP를 선택할 수 있고, Host Header와 Path Pattern 조건으로 Target Group을 분기할 수 있다. [Application Load Balancer 규칙](https://guide.ncloud-docs.com/docs/en/loadbalancer-application-vpc)
 
-서브도메인 사이에서 기존 세션 쿠키를 공유해야 한다면, 배포 시 쿠키의 `Domain`을 상위 도메인(예: `.example.com`)으로 명시하고 `Secure`, `HttpOnly`, `SameSite` 설정을 검증해야 한다. 현재 로컬 구현은 `path=/`만 설정하므로, 이 도메인 쿠키 설정은 별도 배포 작업이 필요하다.
+### Nginx의 최소 책임
+
+Nginx는 인증·RAG·작업 처리를 하지 않는다. 정적 파일을 반환하고 브라우저 요청을 내부 Private ALB로 전달하는 경계다.
+
+~~~nginx
+location / {
+    root /srv/video-rag-web;
+    try_files $uri /index.html;
+}
+
+location /api/ {
+    proxy_set_header Host api.internal;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_pass http://<PRIVATE_ALB_DNS>/;
+}
+
+location = /chat {
+    proxy_set_header Host chat.internal;
+    proxy_pass http://<PRIVATE_ALB_DNS>/chat;
+}
+
+location = /chat/stream {
+    proxy_set_header Host chat.internal;
+    proxy_buffering off;
+    proxy_read_timeout 180s;
+    proxy_pass http://<PRIVATE_ALB_DNS>/chat/stream;
+}
+~~~
+
+이 설정은 `/api/channels`를 API WAS의 `/channels`로 바꾸고, `/chat`과 `/chat/stream`의 경로는 유지한다. 따라서 Web 배포 단계에서는 현재 프론트엔드의 일반 API 호출 경로를 `/api/*`로 맞추는 작업이 필요하다.
 
 ## 확장 기준
 
@@ -290,16 +327,18 @@ NCP Cloud Data Streaming Service는 Kafka 클러스터를 관리형으로 제공
 ## 배포 순서
 
 1. VPC와 public/private subnet, ACG를 만든다.
-2. Cloud DB for PostgreSQL을 만들고 `pgvector`와 운영용 `jobs` 스키마를 적용한다.
+2. Cloud DB for PostgreSQL을 만들고 `pgvector` 확장 사용 권한을 부여한다. API·Chat·Worker에 같은 `DATABASE_URL`을 주입하면 앱 시작 시 운영용 `jobs`와 vector 스키마를 적용한다.
 3. Object Storage private bucket을 만들고 `raw/`, `captions/`, `audio/`, `stt/` prefix를 정한다.
 4. 같은 Docker image를 Container Registry에 push한다.
-5. private API 서버에는 `uvicorn app.main:app`, private Worker 서버에는 `python -m app.worker`를 실행한다. Chat을 분리 배포할 때는 Chat Server용 ASGI 실행 단위를 추가한다.
-6. `api.<domain>`은 API Target Group, `chat.<domain>`은 Chat Target Group에 각각 등록한다. Worker는 어느 Target Group에도 등록하지 않는다.
+5. private Web Server에는 Nginx와 정적 화면을, private API 서버에는 `uvicorn app.main:app`, private Chat Server에는 `uvicorn app.chat_main:app`, private Worker 서버에는 `python -m app.worker`를 실행한다.
+6. Public ALB에는 `web-tg`만, Private ALB에는 `api-tg`와 `chat-tg`만 등록한다. Worker는 어느 Target Group에도 등록하지 않는다.
 7. 분석 한 건이 `queued → running → succeeded` 또는 원인이 있는 `failed`로 끝나는지 확인한 뒤 Worker를 증설한다.
 
 ## 관련 코드
 
 - [app/main.py](../app/main.py): 분석 작업을 등록하고 `202`를 반환하는 HTTP API
+- [app/chat_main.py](../app/chat_main.py): Chat Target Group이 실행하는 ASGI 진입점
+- [app/routers/chat.py](../app/routers/chat.py): `POST /chat` RAG API
 - [app/worker.py](../app/worker.py): 현재 로컬 Worker
-- [app/db.py](../app/db.py): SQLite `jobs` 스키마와 로컬 상태 저장
+- [app/db.py](../app/db.py): SQLite 로컬 모드와 Cloud DB for PostgreSQL + pgvector 모드의 공통 연결 계층
 - [docs/AI_SERVICES.md](AI_SERVICES.md): mock/CLOVA 전환과 STT의 현재 범위

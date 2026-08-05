@@ -1,7 +1,7 @@
 # Backend API
 
-로컬 주소: `http://127.0.0.1:8000`
-대화형 확인: `http://127.0.0.1:8000/docs`
+API 주소: `http://127.0.0.1:8000` · Chat 주소: `http://127.0.0.1:8001`
+대화형 확인: API는 `http://127.0.0.1:8000/docs`, Chat은 `http://127.0.0.1:8001/docs`
 
 | Method | Path | 역할 | 상태 |
 | --- | --- | --- | --- |
@@ -19,7 +19,8 @@
 | `GET` | `/videos/{video_id}/events` | 세션 작업공간 소유 영상의 분석 상태 SSE 구독 | 200 |
 | `POST` | `/videos/{video_id}/transcript` | 로컬 테스트용 시간 자막 입력 | 204 |
 | `POST` | `/recommendations` | 제목·설명 embedding 기반 영상 추천 | 200 |
-| `POST` | `/chat` | 분석된 자막 검색 후 답변과 시간 근거 반환 | 200 |
+| `POST` | Chat Server `/chat` | 분석된 자막 검색 후 완료 답변과 시간 근거 반환 | 200 |
+| `POST` | Chat Server `/chat/stream` | 분석된 자막 검색 후 token SSE와 시간 근거 반환 | 200 |
 
 ## 핵심 요청 예시
 
@@ -63,3 +64,22 @@ data: {"video_id":12,"job_id":314,"status":"running","progress":{"stage":"embedd
 `status`는 `queued`, `running`, `succeeded`, `failed` 중 하나다. `progress.stage`는 `queued`, `downloading_caption`, `transcribing`, `chunking`, `embedding`, `completed`, `failed` 중 하나다. terminal event인 `succeeded` 또는 `failed`를 보낸 뒤 stream은 종료된다.
 
 Worker는 FastAPI에 HTTP callback을 보내지 않는다. Worker가 `jobs`와 `videos`에 상태를 기록하면 SSE endpoint가 DB를 1초 간격으로 읽어 브라우저에 전달한다.
+
+## Chat 응답 스트리밍
+
+`POST /chat`의 JSON 계약은 유지한다. 화면은 Chat Server의 `POST /chat/stream`을 `fetch()`로 호출하고 `text/event-stream` 응답을 읽는다. `EventSource`는 GET 전용이므로 이 endpoint에는 사용하지 않는다.
+
+```text
+retry: 3000
+
+event: evidence
+data: {"evidence":[...]}
+
+event: token
+data: {"text":"자막 근거를 "}
+
+event: done
+data: {"evidence":[...]}
+```
+
+`CHAT_PROVIDER=clova`이면 Chat Server가 CLOVA Studio v3의 `Accept: text/event-stream` token 응답을 내부 SSE 형식으로 중계한다. `mock` 모드도 동일한 이벤트 순서로 짧은 token 조각을 보낸다. provider 호출 중 오류가 나면 `event: error`와 `{ "message": "..." }`를 보낸다.
