@@ -623,6 +623,38 @@ def find_evidence(user_id: int, query: str, limit: int) -> List[Dict]:
     return sorted(evidence, key=lambda item: item["score"], reverse=True)[:limit]
 
 
+def record_chat_message(user_id: int, role: str, content: str) -> None:
+    """Appends a turn and prunes the workspace's history to the configured retention window."""
+    keep = max(0, config.CHAT_HISTORY_TURNS) * 2
+    with connection() as conn:
+        conn.execute(
+            "INSERT INTO chat_messages(user_id, role, content) VALUES (?, ?, ?)",
+            (user_id, role, content),
+        )
+        conn.execute(
+            """
+            DELETE FROM chat_messages
+            WHERE user_id=? AND id NOT IN (
+                SELECT id FROM chat_messages WHERE user_id=? ORDER BY id DESC LIMIT ?
+            )
+            """,
+            (user_id, user_id, keep),
+        )
+
+
+def recent_chat_history(user_id: int) -> List[Dict[str, str]]:
+    """Returns this workspace's last CHAT_HISTORY_TURNS turns in chronological order."""
+    limit = max(0, config.CHAT_HISTORY_TURNS) * 2
+    if limit == 0:
+        return []
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT role, content FROM chat_messages WHERE user_id=? ORDER BY id DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+    return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+
+
 def _chat_instruction(evidence: List[Dict]) -> str:
     context = "\n\n".join(
         "[{} {}-{}]\n{}".format(item["title"], item["start_seconds"], item["end_seconds"], item["quote"])
@@ -634,10 +666,11 @@ def _chat_instruction(evidence: List[Dict]) -> str:
     )
 
 
-def _chat_payload(question: str, evidence: List[Dict]) -> Dict:
+def _chat_payload(question: str, evidence: List[Dict], history: Optional[List[Dict[str, str]]] = None) -> Dict:
     return {
         "messages": [
             {"role": "system", "content": _chat_instruction(evidence)},
+            *(history or []),
             {"role": "user", "content": question},
         ],
         "maxTokens": 500,
@@ -659,7 +692,7 @@ def _chat_headers(*, stream: bool = False) -> Dict[str, str]:
     return headers
 
 
-def answer(question: str, evidence: List[Dict]) -> str:
+def answer(question: str, evidence: List[Dict], history: Optional[List[Dict[str, str]]] = None) -> str:
     if not evidence:
         return "분석이 완료된 영상 자막에서 질문과 연결되는 근거를 찾지 못했습니다. 먼저 영상을 분석해 주세요."
     if config.CHAT_PROVIDER == "mock":
@@ -671,14 +704,14 @@ def answer(question: str, evidence: List[Dict]) -> str:
     response = httpx.post(
         "https://clovastudio.stream.ntruss.com/v3/chat-completions/" + config.CLOVA_MODEL,
         headers=_chat_headers(),
-        json=_chat_payload(question, evidence),
+        json=_chat_payload(question, evidence, history),
         timeout=90,
     )
     response.raise_for_status()
     return response.json()["result"]["message"]["content"]
 
 
-def stream_answer(question: str, evidence: List[Dict]) -> Iterator[str]:
+def stream_answer(question: str, evidence: List[Dict], history: Optional[List[Dict[str, str]]] = None) -> Iterator[str]:
     """Yields answer deltas from CLOVA Studio; does not expose provider events to the browser."""
     if not evidence:
         yield "분석이 완료된 영상 자막에서 질문과 연결되는 근거를 찾지 못했습니다. 먼저 영상을 분석해 주세요."
@@ -698,7 +731,7 @@ def stream_answer(question: str, evidence: List[Dict]) -> Iterator[str]:
         "POST",
         "https://clovastudio.stream.ntruss.com/v3/chat-completions/" + config.CLOVA_MODEL,
         headers=_chat_headers(stream=True),
-        json=_chat_payload(question, evidence),
+        json=_chat_payload(question, evidence, history),
         timeout=90,
     ) as response:
         response.raise_for_status()

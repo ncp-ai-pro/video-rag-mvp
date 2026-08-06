@@ -12,6 +12,7 @@
 - `POST /videos/{id}/transcript`: 로컬 테스트용 시간 구간 자막을 넣는다.
 - Chat Server `POST /chat`: 분석 완료된 자막 chunk만 검색하고, 답변과 최대 3개의 실제 재생 시간 링크를 반환한다.
 - Chat Server `POST /chat/stream`: 같은 근거를 먼저 보내고, Chat 답변 token을 SSE로 중계한다. 기존 `/chat` JSON 응답은 유지한다.
+- Chat은 워크스페이스별 최근 `CHAT_HISTORY_TURNS`(기본 3턴) 질문·답변을 `chat_messages` 테이블에 저장했다가 다음 CLOVA 요청의 대화 맥락으로 함께 보낸다. 오래된 턴은 저장 시점에 바로 정리된다.
 
 로컬 기본값은 SQLite `jobs` 테이블과 별도 Worker 프로세스다. `DATABASE_URL`을 설정하면 API·Chat·Worker가 같은 Cloud DB for PostgreSQL에 연결하고, 시작 시 `pgvector` 확장과 1,024차원 RAG vector 스키마를 초기화한다. Worker의 PostgreSQL 작업 선점은 `FOR UPDATE SKIP LOCKED`를 사용한다.
 

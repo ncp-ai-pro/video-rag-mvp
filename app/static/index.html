@@ -19,6 +19,7 @@
     .tag { display:inline-block; border-radius:999px; padding:2px 7px; font-size:11px; font-weight:650; background:#eef1f5; color:#556070; } .tag.ready { background:#e9f7ef; color:#19703b; } .tag.failed { background:#fff0ef; color:var(--danger); }
     .video-header { padding:16px; border-bottom:1px solid var(--line); } .video-header a { color:var(--accent); text-decoration:none; font-size:13px; } .analysis-note { font-size:13px; color:var(--muted); margin:10px 0; }
     .result { display:block; text-decoration:none; } .score { float:right; color:var(--muted); font-size:12px; } .evidence { border-left:3px solid var(--accent); padding:10px 12px; margin-top:10px; background:#f8fbff; } .evidence a { color:var(--accent); font-weight:650; text-decoration:none; }
+    .chat-log { max-height:440px; overflow-y:auto; } .msg { padding:9px 12px; border-radius:10px; margin-bottom:10px; white-space:pre-wrap; } .msg.user { background:var(--soft); margin-left:28px; } .msg.assistant { background:#f3f5f8; margin-right:28px; }
     #toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:#172033; color:#fff; padding:10px 14px; border-radius:7px; font-size:13px; display:none; max-width:90vw; }
     @media (max-width: 980px) { main { grid-template-columns:230px 1fr; } #chat-panel { grid-column:1 / -1; } }
     @media (max-width: 650px) { header { padding:0 16px; } main { display:block; padding:12px; } section { margin-bottom:12px; } }
@@ -53,9 +54,9 @@
         </div>
         <div class="block">
           <label for="chat-query" class="name">RAG 질문</label>
-          <p class="analysis-note">분석 완료된 자막에서 근거 구간을 최대 3개 반환합니다.</p>
+          <p class="analysis-note">분석 완료된 자막에서 근거 구간을 최대 3개 반환합니다. 최근 3턴의 대화 맥락이 유지됩니다.</p>
           <form id="chat-form"><input id="chat-query" placeholder="영상에서 RAG 구축 순서를 설명해줘"><button>질문</button></form>
-          <div id="answer"></div>
+          <div id="answer" class="chat-log"></div>
         </div>
       </div>
     </section>
@@ -67,6 +68,7 @@
     let selectedVideo = null;
     let analysisEventSource = null;
     let analysisEventVideoId = null;
+    let chatTurns = [];
     const byId = (id) => document.getElementById(id);
     const esc = (text = '') => String(text).replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
     const toast = (message) => { const el = byId('toast'); el.textContent = message; el.style.display = 'block'; setTimeout(() => el.style.display = 'none', 3200); };
@@ -141,16 +143,48 @@
         return target.toString();
       } catch (_) { return rawUrl; }
     }
-    function renderAnswer(answer, evidence = []) { byId('answer').innerHTML = `<p>${esc(answer)}</p>${evidence.map(item => `<div class="evidence"><a href="${esc(playbackUrl(item.url))}" target="_blank" rel="noreferrer">${esc(item.title)} · ${Math.floor(item.start_seconds / 60)}:${String(Math.floor(item.start_seconds % 60)).padStart(2,'0')}–${Math.floor(item.end_seconds / 60)}:${String(Math.floor(item.end_seconds % 60)).padStart(2,'0')}</a><br><span class="meta">${esc(item.quote)}</span></div>`).join('')}`; }
+    function evidenceHtml(evidence = []) { return evidence.map(item => `<div class="evidence"><a href="${esc(playbackUrl(item.url))}" target="_blank" rel="noreferrer">${esc(item.title)} · ${Math.floor(item.start_seconds / 60)}:${String(Math.floor(item.start_seconds % 60)).padStart(2,'0')}–${Math.floor(item.end_seconds / 60)}:${String(Math.floor(item.end_seconds % 60)).padStart(2,'0')}</a><br><span class="meta">${esc(item.quote)}</span></div>`).join(''); }
+    function renderLog() {
+      const container = byId('answer');
+      if (!chatTurns.length) { container.innerHTML = '<p class="empty">아직 대화 기록이 없습니다. 질문을 입력해 보세요.</p>'; return; }
+      container.innerHTML = chatTurns.map(turn => `<div class="msg ${turn.role}">${esc(turn.content)}</div>${turn.role === 'assistant' ? evidenceHtml(turn.evidence) : ''}`).join('');
+      container.scrollTop = container.scrollHeight;
+    }
+    async function loadChatHistory() {
+      try { const history = await chatApi('/chat/history'); chatTurns = (history.messages || []).map(message => ({role: message.role, content: message.content, evidence: []})); }
+      catch (_) { chatTurns = []; }
+      renderLog();
+    }
     async function analyzeSelectedVideo() { try { const result = await api(`/videos/${selectedVideo.id}/analyze`, {method:'POST'}); toast(`분석 작업 ${result.job_id}번을 등록했습니다. Worker가 처리합니다.`); selectedVideo.analysis_status = 'queued'; selectedVideo.analysis_stage = 'queued'; selectedVideo.analysis_message = '분석 작업을 기다리고 있습니다.'; selectedVideo.analysis_error = null; renderSelectedVideo(); openAnalysisEvents(selectedVideo.id); await loadVideos(); } catch (error) { toast(error.message); } }
     byId('channel-form').onsubmit = async (event) => { event.preventDefault(); try { const channel = await api('/channels', {method:'POST', body:JSON.stringify({url:byId('channel-url').value})}); byId('channel-url').value = ''; selectedChannelId = channel.id; toast('채널을 등록했습니다. 새 영상 탐색을 실행하세요.'); await loadChannels(); } catch (error) { toast(error.message); } };
     byId('scan-button').onclick = async () => { try { const result = await api(`/channels/${selectedChannelId}/scan`, {method:'POST'}); toast(`메타데이터 탐색 작업 ${result.job_id}번을 등록했습니다.`); } catch (error) { toast(error.message); } };
     byId('recommendation-form').onsubmit = async (event) => { event.preventDefault(); try { const result = await api('/recommendations', {method:'POST', body:JSON.stringify({query:byId('recommendation-query').value})}); byId('recommendations').innerHTML = result.items.length ? result.items.map(item => `<a class="result" href="${esc(item.url)}" target="_blank" rel="noreferrer"><span class="name">${esc(item.title)} <span class="score">${item.score}</span></span><span class="meta">${esc(item.basis)}</span></a>`).join('') : '<p class="empty">추천할 메타데이터가 없습니다.</p>'; } catch (error) { toast(error.message); } };
-    byId('chat-form').onsubmit = async (event) => { event.preventDefault(); const form = event.currentTarget; const button = form.querySelector('button'); let answer = ''; let evidence = []; button.disabled = true; byId('answer').innerHTML = '<p class="analysis-note">답변을 생성하고 있습니다…</p>'; try { await streamChat('/chat/stream', {method:'POST', body:JSON.stringify({query:byId('chat-query').value})}, (type, data) => { if (type === 'evidence') evidence = data.evidence || []; if (type === 'token') { answer += data.text || ''; renderAnswer(answer, evidence); } if (type === 'done') { evidence = data.evidence || evidence; renderAnswer(answer, evidence); } if (type === 'error') throw new Error(data.message || 'Chat 응답 생성에 실패했습니다.'); }); } catch (error) { toast(error.message); } finally { button.disabled = false; } };
+    byId('chat-form').onsubmit = async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget; const button = form.querySelector('button');
+      const query = byId('chat-query').value; if (!query.trim()) return;
+      button.disabled = true; byId('chat-query').value = '';
+      chatTurns.push({role:'user', content:query});
+      const assistantTurn = {role:'assistant', content:'', evidence:[]};
+      chatTurns.push(assistantTurn);
+      renderLog();
+      try {
+        await streamChat('/chat/stream', {method:'POST', body:JSON.stringify({query})}, (type, data) => {
+          if (type === 'evidence') assistantTurn.evidence = data.evidence || [];
+          if (type === 'token') { assistantTurn.content += data.text || ''; renderLog(); }
+          if (type === 'done') { assistantTurn.evidence = data.evidence || assistantTurn.evidence; renderLog(); }
+          if (type === 'error') throw new Error(data.message || 'Chat 응답 생성에 실패했습니다.');
+        });
+      } catch (error) {
+        if (!assistantTurn.content) chatTurns.pop();
+        renderLog();
+        toast(error.message);
+      } finally { button.disabled = false; }
+    };
     async function loadWorkspace() { const workspace = await api('/auth/me'); byId('workspace-code').textContent = `작업공간 코드: ${workspace.workspace_code}`; }
-    byId('connect-workspace').onclick = async () => { const code = window.prompt('기존 작업공간 코드를 입력하세요.'); if (!code) return; try { const workspace = await api('/auth/workspace', {method:'POST', body:JSON.stringify({workspace_code:code})}); closeAnalysisEvents(); selectedChannelId = null; selectedVideo = null; byId('workspace-code').textContent = `작업공간 코드: ${workspace.workspace_code}`; await loadChannels(); toast('기존 작업공간에 연결했습니다.'); } catch (error) { toast(error.message); } };
-    byId('new-workspace').onclick = async () => { if (!window.confirm('새 작업공간으로 전환할까요? 현재 작업공간은 코드로 다시 연결할 수 있습니다.')) return; const workspace = await api('/auth/new-workspace', {method:'POST'}); closeAnalysisEvents(); selectedChannelId = null; selectedVideo = null; byId('workspace-code').textContent = `작업공간 코드: ${workspace.workspace_code}`; await loadChannels(); toast('새 작업공간을 만들었습니다.'); };
-    api('/health').then(async () => { byId('server-status').textContent = '로컬 서버 연결됨'; await loadWorkspace(); await loadChannels(); }).catch(() => { byId('server-status').textContent = '서버 연결 실패'; });
+    byId('connect-workspace').onclick = async () => { const code = window.prompt('기존 작업공간 코드를 입력하세요.'); if (!code) return; try { const workspace = await api('/auth/workspace', {method:'POST', body:JSON.stringify({workspace_code:code})}); closeAnalysisEvents(); selectedChannelId = null; selectedVideo = null; byId('workspace-code').textContent = `작업공간 코드: ${workspace.workspace_code}`; await loadChannels(); await loadChatHistory(); toast('기존 작업공간에 연결했습니다.'); } catch (error) { toast(error.message); } };
+    byId('new-workspace').onclick = async () => { if (!window.confirm('새 작업공간으로 전환할까요? 현재 작업공간은 코드로 다시 연결할 수 있습니다.')) return; const workspace = await api('/auth/new-workspace', {method:'POST'}); closeAnalysisEvents(); selectedChannelId = null; selectedVideo = null; byId('workspace-code').textContent = `작업공간 코드: ${workspace.workspace_code}`; await loadChannels(); await loadChatHistory(); toast('새 작업공간을 만들었습니다.'); };
+    api('/health').then(async () => { byId('server-status').textContent = '로컬 서버 연결됨'; await loadWorkspace(); await loadChannels(); await loadChatHistory(); }).catch(() => { byId('server-status').textContent = '서버 연결 실패'; });
   </script>
 </body>
 </html>
