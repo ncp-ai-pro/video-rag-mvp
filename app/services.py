@@ -466,24 +466,66 @@ def import_transcript(
     video_id: int,
     segments: List[Dict],
     *,
+    paragraphs: Optional[List[Dict]] = None,
     mark_analyzed: bool = True,
     embed_text: Callable[[str], List[float]] = embedding,
 ):
+    if paragraphs is None:
+        paragraphs = [
+            {
+                "paragraph_index": index,
+                "start_seconds": segment["start_seconds"],
+                "end_seconds": segment["end_seconds"],
+                "text": segment["text"],
+            }
+            for index, segment in enumerate(segments)
+        ]
+        segments = [
+            {
+                **segment,
+                "paragraph_index": index,
+                "chunk_index": 0,
+            }
+            for index, segment in enumerate(segments)
+        ]
+
     with connection() as conn:
         exists = conn.execute("SELECT id FROM videos WHERE id=?", (video_id,)).fetchone()
         if not exists:
             raise LookupError("video not found")
         conn.execute("DELETE FROM transcript_chunks WHERE video_id=?", (video_id,))
+        conn.execute("DELETE FROM transcript_paragraphs WHERE video_id=?", (video_id,))
+        paragraph_ids = {}
+        for index, paragraph in enumerate(paragraphs):
+            start_seconds = paragraph["start_seconds"]
+            end_seconds = paragraph["end_seconds"]
+            if end_seconds <= start_seconds:
+                raise ValueError("paragraph end_seconds must be greater than start_seconds")
+            paragraph_index = paragraph.get("paragraph_index", index)
+            row = conn.execute(
+                """
+                INSERT INTO transcript_paragraphs(video_id, paragraph_index, start_seconds, end_seconds, text)
+                VALUES (?, ?, ?, ?, ?)
+                RETURNING id
+                """,
+                (video_id, paragraph_index, start_seconds, end_seconds, paragraph["text"]),
+            ).fetchone()
+            paragraph_ids[paragraph_index] = row["id"]
         for segment in segments:
             if segment["end_seconds"] <= segment["start_seconds"]:
                 raise ValueError("end_seconds must be greater than start_seconds")
+            paragraph_id = paragraph_ids.get(segment.get("paragraph_index"))
             conn.execute(
                 """
-                INSERT INTO transcript_chunks(video_id, start_seconds, end_seconds, text, embedding)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO transcript_chunks(
+                    video_id, paragraph_id, chunk_index, start_seconds, end_seconds, text, embedding
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     video_id,
+                    paragraph_id,
+                    segment.get("chunk_index", 0),
                     segment["start_seconds"],
                     segment["end_seconds"],
                     segment["text"],
@@ -566,14 +608,18 @@ def find_evidence(user_id: int, query: str, limit: int, video_id: Optional[int] 
     query_vector = embedding(query)
     video_filter = " AND videos.id=?" if video_id is not None else ""
     video_params = (video_id,) if video_id is not None else ()
+    expanded_limit = max(limit * 4, limit)
     with connection() as conn:
         if is_postgres():
             rows = conn.execute(
                 """
-                SELECT chunks.start_seconds, chunks.end_seconds, chunks.text,
+                SELECT chunks.id AS chunk_id, chunks.paragraph_id,
+                       chunks.start_seconds, chunks.end_seconds, chunks.text,
+                       paragraphs.text AS paragraph_text,
                        videos.id AS video_id, videos.title, videos.url,
                        1 - (chunks.embedding <=> ?::vector) AS score
                 FROM transcript_chunks AS chunks
+                LEFT JOIN transcript_paragraphs AS paragraphs ON paragraphs.id = chunks.paragraph_id
                 JOIN videos ON videos.id = chunks.video_id
                 JOIN channels ON channels.id = videos.channel_id
                 WHERE videos.analysis_status IN ('succeeded', 'ready') AND channels.user_id=?"""
@@ -582,28 +628,41 @@ def find_evidence(user_id: int, query: str, limit: int, video_id: Optional[int] 
                 ORDER BY chunks.embedding <=> ?::vector
                 LIMIT ?
                 """,
-                (json.dumps(query_vector), user_id, *video_params, json.dumps(query_vector), limit),
+                (json.dumps(query_vector), user_id, *video_params, json.dumps(query_vector), expanded_limit),
             ).fetchall()
             evidence = []
+            seen = set()
             for row in rows:
+                dedupe_key = (row["video_id"], row["paragraph_id"] or row["chunk_id"])
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
                 separator = "&" if "?" in row["url"] else "?"
                 evidence.append(
                     {
+                        "chunk_id": row["chunk_id"],
+                        "paragraph_id": row["paragraph_id"],
                         "video_id": row["video_id"],
                         "title": row["title"],
                         "start_seconds": row["start_seconds"],
                         "end_seconds": row["end_seconds"],
                         "quote": row["text"],
+                        "context": row["paragraph_text"] or row["text"],
                         "url": row["url"] + separator + "t=" + str(int(row["start_seconds"])) + "s",
                         "score": round(float(row["score"]), 4),
                     }
                 )
+                if len(evidence) >= limit:
+                    break
             return evidence
         rows = conn.execute(
             """
-            SELECT chunks.start_seconds, chunks.end_seconds, chunks.text, chunks.embedding,
+            SELECT chunks.id AS chunk_id, chunks.paragraph_id,
+                   chunks.start_seconds, chunks.end_seconds, chunks.text, chunks.embedding,
+                   paragraphs.text AS paragraph_text,
                    videos.id AS video_id, videos.title, videos.url
             FROM transcript_chunks AS chunks
+            LEFT JOIN transcript_paragraphs AS paragraphs ON paragraphs.id = chunks.paragraph_id
             JOIN videos ON videos.id = chunks.video_id
             JOIN channels ON channels.id = videos.channel_id
             WHERE videos.analysis_status IN ('succeeded', 'ready') AND channels.user_id=?"""
@@ -617,16 +676,29 @@ def find_evidence(user_id: int, query: str, limit: int, video_id: Optional[int] 
         separator = "&" if "?" in row["url"] else "?"
         evidence.append(
             {
+                "chunk_id": row["chunk_id"],
+                "paragraph_id": row["paragraph_id"],
                 "video_id": row["video_id"],
                 "title": row["title"],
                 "start_seconds": row["start_seconds"],
                 "end_seconds": row["end_seconds"],
                 "quote": row["text"],
+                "context": row["paragraph_text"] or row["text"],
                 "url": row["url"] + separator + "t=" + str(int(row["start_seconds"])) + "s",
                 "score": round(cosine(query_vector, json.loads(row["embedding"])), 4),
             }
         )
-    return sorted(evidence, key=lambda item: item["score"], reverse=True)[:limit]
+    deduped = []
+    seen = set()
+    for item in sorted(evidence, key=lambda item: item["score"], reverse=True):
+        dedupe_key = (item["video_id"], item["paragraph_id"] or item["chunk_id"])
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        deduped.append(item)
+        if len(deduped) >= limit:
+            break
+    return deduped
 
 
 def record_chat_message(user_id: int, role: str, content: str, evidence: Optional[List[Dict]] = None) -> None:
@@ -720,7 +792,9 @@ def paged_chat_history(user_id: int, *, limit: int = 20, before_id: Optional[int
 
 def _chat_instruction(evidence: List[Dict]) -> str:
     context = "\n\n".join(
-        "[{} {}-{}]\n{}".format(item["title"], item["start_seconds"], item["end_seconds"], item["quote"])
+        "[{} {}-{}]\n{}".format(
+            item["title"], item["start_seconds"], item["end_seconds"], item.get("context") or item["quote"]
+        )
         for item in evidence
     )
     return (

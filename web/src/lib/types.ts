@@ -93,11 +93,14 @@ export interface RecommendationResponse {
 
 /** url에는 이미 ?t={start}s 가 붙어 있다. */
 export interface Evidence {
+  chunk_id?: number
+  paragraph_id?: number | null
   video_id: number
   title: string
   start_seconds: number
   end_seconds: number
   quote: string
+  context?: string
   url: string
   score: number
 }
