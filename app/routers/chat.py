@@ -44,7 +44,8 @@ def chat_stream(payload: ChatRequest, workspace: Dict = Depends(current_workspac
             for text in stream_answer(payload.query, evidence, history):
                 latest = text
                 yield sse("token", {"text": text})
-            record_chat_turn(workspace["id"], payload.query, latest)
+            record_chat_message(workspace["id"], "user", payload.query)
+            record_chat_message(workspace["id"], "assistant", latest)
             yield sse("done", {"evidence": evidence})
         except Exception as exc:
             yield sse("error", {"message": str(exc)})
