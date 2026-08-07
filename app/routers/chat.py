@@ -39,13 +39,13 @@ def chat_stream(payload: ChatRequest, workspace: Dict = Depends(current_workspac
     def event_stream():
         yield "retry: 3000\n\n"
         yield sse("evidence", {"evidence": evidence})
-        chunks = []
+        latest = ""
         try:
             for text in stream_answer(payload.query, evidence, history):
-                chunks.append(text)
+                latest = text
                 yield sse("token", {"text": text})
             record_chat_message(workspace["id"], "user", payload.query)
-            record_chat_message(workspace["id"], "assistant", "".join(chunks))
+            record_chat_message(workspace["id"], "assistant", latest)
             yield sse("done", {"evidence": evidence})
         except Exception as exc:
             yield sse("error", {"message": str(exc)})

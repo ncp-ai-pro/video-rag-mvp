@@ -716,6 +716,13 @@ def answer(question: str, evidence: List[Dict], history: Optional[List[Dict[str,
     response.raise_for_status()
     return response.json()["result"]["message"]["content"]
 
+def _common_prefix_length(a: str, b: str) -> int:
+    length = min(len(a), len(b))
+    for i in range(length):
+        if a[i] != b[i]:
+            return i
+    return length
+
 
 def stream_answer(question: str, evidence: List[Dict], history: Optional[List[Dict[str, str]]] = None) -> Iterator[str]:
     """Yields answer deltas from CLOVA Studio; does not expose provider events to the browser."""
@@ -751,7 +758,7 @@ def stream_answer(question: str, evidence: List[Dict], history: Optional[List[Di
             content = event.get("message", {}).get("content")
             if not content:
                 continue
-            delta = content[len(previous_content) :] if content.startswith(previous_content) else content
+            delta = content[_common_prefix_length(previous_content, content):]
             previous_content = content
             if delta:
                 yield delta
