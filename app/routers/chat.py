@@ -14,7 +14,7 @@ router = APIRouter()
 
 @router.get("/chat/history")
 def chat_history(workspace: Dict = Depends(current_workspace)):
-    return {"messages": recent_chat_history(workspace["id"])}
+    return {"messages": recent_chat_history(workspace["id"], include_evidence=True)}
 
 
 @router.post("/chat")
@@ -23,7 +23,7 @@ def chat(payload: ChatRequest, workspace: Dict = Depends(current_workspace)):
     history = recent_chat_history(workspace["id"])
     answer_text = answer(payload.query, evidence, history)
     record_chat_message(workspace["id"], "user", payload.query)
-    record_chat_message(workspace["id"], "assistant", answer_text)
+    record_chat_message(workspace["id"], "assistant", answer_text, evidence)
     return {"answer": answer_text, "evidence": evidence}
 
 
@@ -45,7 +45,7 @@ def chat_stream(payload: ChatRequest, workspace: Dict = Depends(current_workspac
                 latest = text
                 yield sse("token", {"text": text})
             record_chat_message(workspace["id"], "user", payload.query)
-            record_chat_message(workspace["id"], "assistant", latest)
+            record_chat_message(workspace["id"], "assistant", latest, evidence)
             yield sse("done", {"evidence": evidence})
         except Exception as exc:
             yield sse("error", {"message": str(exc)})

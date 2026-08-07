@@ -140,6 +140,12 @@ def test_chat_router_keeps_post_contract_and_workspace_scope():
             assert response.status_code == 200
             assert set(response.json()) == {"answer", "evidence"}
             assert response.json()["evidence"][0]["video_id"] == video["video_id"]
+            history = owner_chat.get("/chat/history")
+            assert history.status_code == 200
+            messages = history.json()["messages"]
+            assert [message["role"] for message in messages] == ["user", "assistant"]
+            assert messages[0]["content"] == "자막 근거"
+            assert messages[1]["evidence"][0]["video_id"] == video["video_id"]
 
             with owner_chat.stream("POST", "/chat/stream", json={"query": "자막 근거"}) as response:
                 assert response.status_code == 200
@@ -151,12 +157,21 @@ def test_chat_router_keeps_post_contract_and_workspace_scope():
             assert "event: done" in streamed
             assert '"text":"로컬 "' in streamed
             assert '"text":"테스트 "' in streamed
+            history = owner_chat.get("/chat/history")
+            assert history.status_code == 200
+            messages = history.json()["messages"]
+            assert [message["role"] for message in messages] == ["user", "assistant", "user", "assistant"]
+            assert messages[-1]["evidence"][0]["video_id"] == video["video_id"]
 
         with TestClient(main.app) as other_workspace, TestClient(chat_main.app) as other_workspace_chat:
             assert other_workspace.get(f"/videos/{video['video_id']}").status_code == 404
             response = other_workspace_chat.post("/chat", json={"query": "자막 근거"})
             assert response.status_code == 200
             assert response.json()["evidence"] == []
+            history = other_workspace_chat.get("/chat/history")
+            assert history.status_code == 200
+            messages = history.json()["messages"]
+            assert messages[-1]["evidence"] == []
 
 
 def test_sse_streams_db_owned_analysis_progress_and_rejects_other_workspace():

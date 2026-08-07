@@ -9,7 +9,7 @@ import type { ChatMessage, Evidence } from '@/lib/types'
 
 /**
  * 한 번의 질문·답변·근거. 대화는 백엔드(GET /chat/history)에 작업공간별로 저장된다.
- * 서버는 텍스트만 저장하므로, 과거 turn에는 근거(evidence)가 없다(현재 세션 답변에만 있음).
+ * assistant 메시지에는 저장된 근거(evidence)가 함께 돌아오므로, 새로고침 후에도 다시 렌더링할 수 있다.
  */
 interface ChatTurn {
   id: string
@@ -23,15 +23,15 @@ interface ChatTurn {
 function messagesToTurns(messages: ChatMessage[]): ChatTurn[] {
   const turns: ChatTurn[] = []
   let pendingQuestion: string | null = null
-  const push = (question: string, answer: string) =>
-    turns.push({ id: crypto.randomUUID(), question, answer, evidence: [], status: 'done' })
+  const push = (question: string, answer: string, evidence: Evidence[] = []) =>
+    turns.push({ id: crypto.randomUUID(), question, answer, evidence, status: 'done' })
 
   for (const message of messages) {
     if (message.role === 'user') {
       if (pendingQuestion !== null) push(pendingQuestion, '')
       pendingQuestion = message.content
     } else {
-      push(pendingQuestion ?? '', message.content)
+      push(pendingQuestion ?? '', message.content, message.evidence ?? [])
       pendingQuestion = null
     }
   }

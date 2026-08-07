@@ -107,10 +107,11 @@ export interface ChatResponse {
   evidence: Evidence[]
 }
 
-/** GET /chat/history 의 항목. 서버는 근거는 저장하지 않고 텍스트만 남긴다. */
+/** GET /chat/history 의 항목. assistant 메시지는 저장된 근거 구간을 함께 돌려줄 수 있다. */
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  evidence?: Evidence[]
 }
 
 export const isAnalyzed = (status: AnalysisStatus) =>

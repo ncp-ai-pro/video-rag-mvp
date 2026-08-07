@@ -629,13 +629,14 @@ def find_evidence(user_id: int, query: str, limit: int, video_id: Optional[int] 
     return sorted(evidence, key=lambda item: item["score"], reverse=True)[:limit]
 
 
-def record_chat_message(user_id: int, role: str, content: str) -> None:
+def record_chat_message(user_id: int, role: str, content: str, evidence: Optional[List[Dict]] = None) -> None:
     """Appends a turn and prunes the workspace's history to the configured retention window."""
     keep = max(0, config.CHAT_HISTORY_TURNS) * 2
+    evidence_json = json.dumps(evidence, ensure_ascii=False, separators=(",", ":")) if evidence else None
     with connection() as conn:
         conn.execute(
-            "INSERT INTO chat_messages(user_id, role, content) VALUES (?, ?, ?)",
-            (user_id, role, content),
+            "INSERT INTO chat_messages(user_id, role, content, evidence_json) VALUES (?, ?, ?, ?)",
+            (user_id, role, content, evidence_json),
         )
         conn.execute(
             """
@@ -648,17 +649,27 @@ def record_chat_message(user_id: int, role: str, content: str) -> None:
         )
 
 
-def recent_chat_history(user_id: int) -> List[Dict[str, str]]:
+def recent_chat_history(user_id: int, *, include_evidence: bool = False) -> List[Dict]:
     """Returns this workspace's last CHAT_HISTORY_TURNS turns in chronological order."""
     limit = max(0, config.CHAT_HISTORY_TURNS) * 2
     if limit == 0:
         return []
     with connection() as conn:
         rows = conn.execute(
-            "SELECT role, content FROM chat_messages WHERE user_id=? ORDER BY id DESC LIMIT ?",
+            "SELECT role, content, evidence_json FROM chat_messages WHERE user_id=? ORDER BY id DESC LIMIT ?",
             (user_id, limit),
         ).fetchall()
-    return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+    history = []
+    for row in reversed(rows):
+        item = {"role": row["role"], "content": row["content"]}
+        if include_evidence:
+            try:
+                evidence_json = row["evidence_json"]
+                item["evidence"] = json.loads(evidence_json) if evidence_json else []
+            except (TypeError, ValueError, json.JSONDecodeError):
+                item["evidence"] = []
+        history.append(item)
+    return history
 
 
 def _chat_instruction(evidence: List[Dict]) -> str:

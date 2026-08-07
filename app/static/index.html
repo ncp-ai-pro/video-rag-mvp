@@ -151,7 +151,7 @@
       container.scrollTop = container.scrollHeight;
     }
     async function loadChatHistory() {
-      try { const history = await chatApi('/chat/history'); chatTurns = (history.messages || []).map(message => ({role: message.role, content: message.content, evidence: []})); }
+      try { const history = await chatApi('/chat/history'); chatTurns = (history.messages || []).map(message => ({role: message.role, content: message.content, evidence: Array.isArray(message.evidence) ? message.evidence : []})); }
       catch (_) { chatTurns = []; }
       renderLog();
     }

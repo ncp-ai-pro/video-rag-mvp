@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
     content TEXT NOT NULL,
+    evidence_json TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -199,6 +200,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
     content TEXT NOT NULL,
+    evidence_json TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -280,6 +282,7 @@ def initialize():
             # API, Chat, and Worker can start together; serialize schema creation.
             conn.execute("SELECT pg_advisory_xact_lock(7401024)")
             conn.executescript(POSTGRES_SCHEMA)
+            conn.execute("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS evidence_json TEXT")
         return
 
     with connection() as conn:
@@ -319,6 +322,7 @@ def initialize():
         _add_column_if_missing(conn, "jobs", "progress_stage", "TEXT")
         _add_column_if_missing(conn, "jobs", "progress_message", "TEXT")
         _add_column_if_missing(conn, "jobs", "updated_at", "TEXT")
+        _add_column_if_missing(conn, "chat_messages", "evidence_json", "TEXT")
         conn.execute("UPDATE videos SET analysis_status='succeeded' WHERE analysis_status='ready'")
         conn.execute(
             """
