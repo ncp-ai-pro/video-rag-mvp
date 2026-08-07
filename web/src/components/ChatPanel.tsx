@@ -248,35 +248,38 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
 
               {/* 근거 구간 */}
               {turn.evidence.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs font-medium text-muted-foreground">근거 구간</p>
-                  <ul className="space-y-2">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[0.72rem] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                      참고 구간
+                    </p>
+                    <p className="text-[0.72rem] text-muted-foreground">클릭하면 영상 위치로 이동</p>
+                  </div>
+                  <ul className="space-y-1.5">
                     {turn.evidence.map((item) => (
                       <li key={`${item.video_id}-${item.start_seconds}`}>
                         <button
                           type="button"
                           onClick={() => seekTo(item)}
-                          className={`group w-full rounded-lg border p-2.5 text-left transition-colors hover:border-primary/60 hover:bg-accent ${
+                          className={`group w-full rounded-xl border px-3 py-2 text-left transition-colors hover:border-foreground/20 hover:bg-muted/40 ${
                             item.is_primary
-                              ? 'border-amber-300 bg-amber-50/80'
-                              : 'border-border/60 bg-card'
+                              ? 'border-foreground/15 bg-background shadow-[inset_2px_0_0_hsl(var(--foreground)/0.28)]'
+                              : 'border-border/60 bg-background/70'
                           }`}
                         >
-                          <div className="flex items-center gap-2">
-                            <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/15 text-primary group-hover:bg-primary group-hover:text-primary-foreground">
-                              <Play className="size-3.5" />
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 font-mono text-[0.68rem] text-muted-foreground">
+                              <Play className="size-3" />
+                              {formatTimestamp(item.start_seconds)}–{formatTimestamp(item.end_seconds)}
                             </span>
                             {item.is_primary && (
-                              <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[0.65rem] font-semibold text-amber-800">
-                                핵심
+                              <span className="rounded-full border border-border/70 px-1.5 py-0.5 text-[0.65rem] font-medium text-foreground/70">
+                                주요
                               </span>
                             )}
-                            <span className="truncate text-xs font-medium">{item.title}</span>
-                            <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
-                              {formatTimestamp(item.start_seconds)} – {formatTimestamp(item.end_seconds)}
-                            </span>
+                            <span className="min-w-0 truncate text-muted-foreground">{item.title}</span>
                           </div>
-                          <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">
+                          <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-foreground/75">
                             {quoteWithHighlight(item)}
                           </p>
                         </button>
@@ -293,25 +296,25 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
       {/* 입력 */}
       <div className="border-t border-border/60 p-3">
         <div className="mb-2 flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">근거 표시</span>
-          <div className="inline-flex overflow-hidden rounded-lg border border-border/70">
+          <span className="text-xs text-muted-foreground">근거</span>
+          <div className="inline-flex overflow-hidden rounded-full border border-border/70 bg-background">
             <Button
               type="button"
-              variant={evidenceMode === 'simple' ? 'default' : 'ghost'}
+              variant="ghost"
               size="xs"
-              className="rounded-none"
+              className={`rounded-none px-3 ${evidenceMode === 'simple' ? 'bg-foreground text-background hover:bg-foreground/90 hover:text-background' : 'text-muted-foreground'}`}
               onClick={() => setEvidenceMode('simple')}
             >
-              간단 근거
+              기본
             </Button>
             <Button
               type="button"
-              variant={evidenceMode === 'precise' ? 'default' : 'ghost'}
+              variant="ghost"
               size="xs"
-              className="rounded-none"
+              className={`rounded-none px-3 ${evidenceMode === 'precise' ? 'bg-foreground text-background hover:bg-foreground/90 hover:text-background' : 'text-muted-foreground'}`}
               onClick={() => setEvidenceMode('precise')}
             >
-              정밀 근거
+              문장 강조
             </Button>
           </div>
         </div>

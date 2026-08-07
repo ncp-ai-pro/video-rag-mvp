@@ -18,9 +18,9 @@
     .empty { color:var(--muted); padding:20px 16px; font-size:13px; } .controls { display:flex; gap:8px; margin-top:10px; } .block { margin-bottom:20px; }
     .tag { display:inline-block; border-radius:999px; padding:2px 7px; font-size:11px; font-weight:650; background:#eef1f5; color:#556070; } .tag.ready { background:#e9f7ef; color:#19703b; } .tag.failed { background:#fff0ef; color:var(--danger); }
     .video-header { padding:16px; border-bottom:1px solid var(--line); } .video-header a { color:var(--accent); text-decoration:none; font-size:13px; } .analysis-note { font-size:13px; color:var(--muted); margin:10px 0; }
-    .result { display:block; text-decoration:none; } .score { float:right; color:var(--muted); font-size:12px; } .evidence { border-left:3px solid var(--accent); padding:10px 12px; margin-top:10px; background:#f8fbff; } .evidence.primary { border-color:#b7791f; background:#fff8e6; } .evidence a { color:var(--accent); font-weight:650; text-decoration:none; } .evidence .badge { display:inline-block; margin-right:6px; border-radius:999px; padding:1px 6px; background:#fef3c7; color:#92400e; font-size:11px; font-weight:700; } .highlight { font-weight:750; color:#111827; }
+    .result { display:block; text-decoration:none; } .score { float:right; color:var(--muted); font-size:12px; } .evidence-list { margin-top:8px; } .evidence-title { margin:0 0 6px; color:var(--muted); font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; } .evidence { display:block; border:1px solid var(--line); border-radius:12px; padding:9px 11px; margin-top:7px; background:#fff; text-decoration:none; color:var(--ink); transition:background .15s,border-color .15s; } .evidence:hover { background:#f8fafc; border-color:#c9d1de; } .evidence.primary { box-shadow:inset 2px 0 0 rgba(23,32,51,.32); } .evidence-head { display:flex; align-items:center; gap:6px; min-width:0; } .evidence-time { display:inline-flex; align-items:center; border-radius:999px; padding:1px 7px; background:#eef1f5; color:#556070; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; } .evidence .badge { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:1px 6px; color:#4b5563; font-size:10px; font-weight:650; } .evidence-source { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font-size:12px; } .evidence-quote { display:block; margin-top:6px; color:#4a5568; font-size:12px; line-height:1.55; } .highlight { font-weight:700; color:var(--ink); background:linear-gradient(transparent 58%, #fff0b3 0); }
     .chat-log { max-height:440px; overflow-y:auto; } .msg { padding:9px 12px; border-radius:10px; margin-bottom:10px; white-space:pre-wrap; } .msg.user { background:var(--soft); margin-left:28px; } .msg.assistant { background:#f3f5f8; margin-right:28px; }
-    .segmented { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; } .segmented button { border-radius:0; background:#fff; color:var(--muted); padding:6px 10px; font-size:12px; } .segmented button.active { background:var(--accent); color:#fff; }
+    .segmented { display:inline-flex; border:1px solid var(--line); border-radius:999px; overflow:hidden; background:#fff; } .segmented button { border-radius:0; background:#fff; color:var(--muted); padding:5px 10px; font-size:12px; font-weight:600; } .segmented button.active { background:var(--ink); color:#fff; }
     #toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:#172033; color:#fff; padding:10px 14px; border-radius:7px; font-size:13px; display:none; max-width:90vw; }
     @media (max-width: 980px) { main { grid-template-columns:230px 1fr; } #chat-panel { grid-column:1 / -1; } }
     @media (max-width: 650px) { header { padding:0 16px; } main { display:block; padding:12px; } section { margin-bottom:12px; } }
@@ -56,7 +56,7 @@
         <div class="block">
           <label for="chat-query" class="name">RAG 질문</label>
           <p class="analysis-note">분석 완료된 자막에서 근거 구간을 최대 3개 반환합니다. 최근 3턴의 대화 맥락이 유지됩니다.</p>
-          <div class="controls"><span class="meta">근거 표시</span><div class="segmented" role="group" aria-label="근거 표시 모드"><button type="button" id="mode-simple" class="active">간단 근거</button><button type="button" id="mode-precise">정밀 근거</button></div></div>
+          <div class="controls"><span class="meta">근거</span><div class="segmented" role="group" aria-label="근거 표시 모드"><button type="button" id="mode-simple" class="active">기본</button><button type="button" id="mode-precise">문장 강조</button></div></div>
           <form id="chat-form"><input id="chat-query" placeholder="영상에서 RAG 구축 순서를 설명해줘"><button>질문</button></form>
           <div id="answer" class="chat-log"></div>
         </div>
@@ -156,7 +156,11 @@
       if (index < 0) return esc(quote);
       return `${esc(quote.slice(0, index))}<span class="highlight">${esc(highlight)}</span>${esc(quote.slice(index + highlight.length))}`;
     }
-    function evidenceHtml(evidence = []) { return evidence.map(item => `<div class="evidence ${item.is_primary ? 'primary' : ''}">${item.is_primary ? '<span class="badge">핵심 근거</span>' : ''}<a href="${esc(playbackUrl(item.url))}" target="_blank" rel="noreferrer">${esc(item.title)} · ${Math.floor(item.start_seconds / 60)}:${String(Math.floor(item.start_seconds % 60)).padStart(2,'0')}–${Math.floor(item.end_seconds / 60)}:${String(Math.floor(item.end_seconds % 60)).padStart(2,'0')}</a><br><span class="meta">${highlightedQuote(item)}</span></div>`).join(''); }
+    function evidenceHtml(evidence = []) {
+      if (!evidence.length) return '';
+      const rows = evidence.map(item => `<a class="evidence ${item.is_primary ? 'primary' : ''}" href="${esc(playbackUrl(item.url))}" target="_blank" rel="noreferrer"><span class="evidence-head"><span class="evidence-time">${Math.floor(item.start_seconds / 60)}:${String(Math.floor(item.start_seconds % 60)).padStart(2,'0')}–${Math.floor(item.end_seconds / 60)}:${String(Math.floor(item.end_seconds % 60)).padStart(2,'0')}</span>${item.is_primary ? '<span class="badge">주요</span>' : ''}<span class="evidence-source">${esc(item.title)}</span></span><span class="evidence-quote">${highlightedQuote(item)}</span></a>`).join('');
+      return `<div class="evidence-list"><p class="evidence-title">참고 구간</p>${rows}</div>`;
+    }
     function renderLog(stickToBottom = true) {
       const container = byId('answer');
       if (!chatTurns.length) { container.innerHTML = '<p class="empty">아직 대화 기록이 없습니다. 질문을 입력해 보세요.</p>'; return; }
