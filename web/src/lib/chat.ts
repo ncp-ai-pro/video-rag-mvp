@@ -1,6 +1,6 @@
 import { CHAT_BASE, CHAT_CREDENTIALS } from "./config";
 import { ApiError } from "./api";
-import type { ChatHistoryPage, ChatResponse, Evidence } from "./types";
+import type { ChatHistoryPage, ChatResponse, Evidence, EvidenceMode } from "./types";
 
 /**
  * 작업공간의 저장된 대화 기록을 불러온다. Chat 서버가 세션 쿠키로 작업공간을 식별한다.
@@ -82,7 +82,7 @@ function toStreamEvent(event: string, raw: string): ChatStreamEvent | null {
 export async function streamChat(
   query: string,
   onEvent: (event: ChatStreamEvent) => void,
-  options: { limit?: number; signal?: AbortSignal; videoId?: number | null } = {},
+  options: { evidenceMode?: EvidenceMode; limit?: number; signal?: AbortSignal; videoId?: number | null } = {},
 ): Promise<void> {
   // video_id를 보내면 백엔드가 그 영상으로 근거를 좁힌다. null이면 작업공간 전체.
   const response = await fetch(`${CHAT_BASE}/chat/stream`, {
@@ -96,6 +96,7 @@ export async function streamChat(
       query,
       limit: options.limit ?? 3,
       video_id: options.videoId ?? null,
+      evidence_mode: options.evidenceMode ?? "simple",
     }),
     signal: options.signal,
   });
@@ -139,12 +140,12 @@ export async function streamChat(
 }
 
 /** 스트리밍이 필요 없는 경우의 완료형 호출. */
-export async function askChat(query: string, limit = 3): Promise<ChatResponse> {
+export async function askChat(query: string, limit = 3, evidenceMode: EvidenceMode = "simple"): Promise<ChatResponse> {
   const response = await fetch(`${CHAT_BASE}/chat`, {
     method: "POST",
     credentials: CHAT_CREDENTIALS,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, limit }),
+    body: JSON.stringify({ query, limit, evidence_mode: evidenceMode }),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);

@@ -204,14 +204,20 @@ def test_chat_router_keeps_post_contract_and_workspace_scope():
             assert response.status_code == 200
             assert set(response.json()) == {"answer", "evidence"}
             assert response.json()["evidence"][0]["video_id"] == video["video_id"]
+            assert response.json()["evidence"][0]["rank"] == 1
+            assert response.json()["evidence"][0]["is_primary"] is True
+            assert "highlight" not in response.json()["evidence"][0]
             history = owner_chat.get("/chat/history")
             assert history.status_code == 200
             messages = history.json()["messages"]
             assert [message["role"] for message in messages] == ["user", "assistant"]
             assert messages[0]["content"] == "자막 근거"
             assert messages[1]["evidence"][0]["video_id"] == video["video_id"]
+            assert messages[1]["evidence"][0]["is_primary"] is True
 
-            with owner_chat.stream("POST", "/chat/stream", json={"query": "자막 근거"}) as response:
+            with owner_chat.stream(
+                "POST", "/chat/stream", json={"query": "자막 근거", "evidence_mode": "precise"}
+            ) as response:
                 assert response.status_code == 200
                 assert response.headers["content-type"].startswith("text/event-stream")
                 streamed = response.read().decode("utf-8")
@@ -221,11 +227,13 @@ def test_chat_router_keeps_post_contract_and_workspace_scope():
             assert "event: done" in streamed
             assert '"text":"로컬 "' in streamed
             assert '"text":"테스트 "' in streamed
+            assert '"method":"query_token_overlap"' in streamed
             history = owner_chat.get("/chat/history")
             assert history.status_code == 200
             messages = history.json()["messages"]
             assert [message["role"] for message in messages] == ["user", "assistant", "user", "assistant"]
             assert messages[-1]["evidence"][0]["video_id"] == video["video_id"]
+            assert messages[-1]["evidence"][0]["highlight"]["text"] == "채팅은 검색한 자막 근거로 답변합니다."
             latest_page = owner_chat.get("/chat/history?limit=2")
             assert latest_page.status_code == 200
             latest_body = latest_page.json()

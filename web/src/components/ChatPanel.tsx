@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { fetchChatHistory, streamChat } from '@/lib/chat'
 import { formatTimestamp, playbackUrl, youtubeIdFromUrl } from '@/lib/format'
-import type { ChatMessage, Evidence } from '@/lib/types'
+import type { ChatMessage, Evidence, EvidenceMode } from '@/lib/types'
 
 /**
  * 한 번의 질문·답변·근거. 대화는 백엔드(GET /chat/history)에 작업공간별로 저장된다.
@@ -56,6 +56,7 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
   const [turns, setTurns] = useState<ChatTurn[]>([])
   const [query, setQuery] = useState('')
   const [streaming, setStreaming] = useState(false)
+  const [evidenceMode, setEvidenceMode] = useState<EvidenceMode>('simple')
   const [historyCursor, setHistoryCursor] = useState<number | null>(null)
   const [historyHasMore, setHistoryHasMore] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -156,7 +157,7 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
               break
           }
         },
-        { signal: controller.signal, videoId },
+        { evidenceMode, signal: controller.signal, videoId },
       )
       patch((turn) => (turn.status === 'streaming' ? { ...turn, status: 'done' } : turn))
     } catch (error) {
@@ -172,6 +173,21 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
     const youtubeId = youtubeIdFromUrl(item.url)
     if (youtubeId) onSeek(youtubeId, item.start_seconds)
     else window.open(playbackUrl(item.url), '_blank', 'noreferrer')
+  }
+
+  const quoteWithHighlight = (item: Evidence) => {
+    const quote = item.quote
+    const highlight = item.highlight?.text
+    if (!highlight) return quote
+    const index = quote.indexOf(highlight)
+    if (index < 0) return quote
+    return (
+      <>
+        {quote.slice(0, index)}
+        <strong className="font-semibold text-foreground">{highlight}</strong>
+        {quote.slice(index + highlight.length)}
+      </>
+    )
   }
 
   return (
@@ -240,19 +256,28 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
                         <button
                           type="button"
                           onClick={() => seekTo(item)}
-                          className="group w-full rounded-lg border border-border/60 bg-card p-2.5 text-left transition-colors hover:border-primary/60 hover:bg-accent"
+                          className={`group w-full rounded-lg border p-2.5 text-left transition-colors hover:border-primary/60 hover:bg-accent ${
+                            item.is_primary
+                              ? 'border-amber-300 bg-amber-50/80'
+                              : 'border-border/60 bg-card'
+                          }`}
                         >
                           <div className="flex items-center gap-2">
                             <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/15 text-primary group-hover:bg-primary group-hover:text-primary-foreground">
                               <Play className="size-3.5" />
                             </span>
+                            {item.is_primary && (
+                              <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[0.65rem] font-semibold text-amber-800">
+                                핵심
+                              </span>
+                            )}
                             <span className="truncate text-xs font-medium">{item.title}</span>
                             <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
                               {formatTimestamp(item.start_seconds)} – {formatTimestamp(item.end_seconds)}
                             </span>
                           </div>
                           <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">
-                            {item.quote}
+                            {quoteWithHighlight(item)}
                           </p>
                         </button>
                       </li>
@@ -266,17 +291,42 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
       </div>
 
       {/* 입력 */}
-      <form onSubmit={ask} className="flex gap-2 border-t border-border/60 p-3">
-        <Input
-          value={query}
-          placeholder="영상에 대해 질문하기"
-          aria-label="RAG 질문"
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        <Button type="submit" disabled={streaming || !query.trim()}>
-          {streaming ? '생성 중…' : '질문'}
-        </Button>
-      </form>
+      <div className="border-t border-border/60 p-3">
+        <div className="mb-2 flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">근거 표시</span>
+          <div className="inline-flex overflow-hidden rounded-lg border border-border/70">
+            <Button
+              type="button"
+              variant={evidenceMode === 'simple' ? 'default' : 'ghost'}
+              size="xs"
+              className="rounded-none"
+              onClick={() => setEvidenceMode('simple')}
+            >
+              간단 근거
+            </Button>
+            <Button
+              type="button"
+              variant={evidenceMode === 'precise' ? 'default' : 'ghost'}
+              size="xs"
+              className="rounded-none"
+              onClick={() => setEvidenceMode('precise')}
+            >
+              정밀 근거
+            </Button>
+          </div>
+        </div>
+        <form onSubmit={ask} className="flex gap-2">
+          <Input
+            value={query}
+            placeholder="영상에 대해 질문하기"
+            aria-label="RAG 질문"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <Button type="submit" disabled={streaming || !query.trim()}>
+            {streaming ? '생성 중…' : '질문'}
+          </Button>
+        </form>
+      </div>
     </div>
   )
 }
