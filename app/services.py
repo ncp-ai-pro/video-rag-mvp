@@ -716,23 +716,27 @@ def answer(question: str, evidence: List[Dict], history: Optional[List[Dict[str,
     response.raise_for_status()
     return response.json()["result"]["message"]["content"]
 
+def _common_prefix_length(a: str, b: str) -> int:
+    length = min(len(a), len(b))
+    for i in range(length):
+        if a[i] != b[i]:
+            return i
+    return length
+
 
 def stream_answer(question: str, evidence: List[Dict], history: Optional[List[Dict[str, str]]] = None) -> Iterator[str]:
-    """Yields answer deltas from CLOVA Studio; does not expose provider events to the browser."""
+    """Yields the latest full answer text from CLOVA Studio; caller replaces (not appends) on each event."""
     if not evidence:
         yield "분석이 완료된 영상 자막에서 질문과 연결되는 근거를 찾지 못했습니다. 먼저 영상을 분석해 주세요."
         return
     if config.CHAT_PROVIDER == "mock":
-        text = "로컬 테스트 모드입니다. 아래 근거 구간을 기준으로 CLOVA Chat 답변을 생성하게 됩니다."
-        for word in text.split(" "):
-            yield word + " "
+        yield "로컬 테스트 모드입니다. 아래 근거 구간을 기준으로 CLOVA Chat 답변을 생성하게 됩니다."
         return
     if config.CHAT_PROVIDER != "clova":
         raise RuntimeError("CHAT_PROVIDER must be mock or clova")
     if not config.CLOVASTUDIO_API_KEY:
         raise RuntimeError("CLOVASTUDIO_API_KEY is required for CHAT_PROVIDER=clova")
 
-    previous_content = ""
     with httpx.stream(
         "POST",
         "https://clovastudio.stream.ntruss.com/v3/chat-completions/" + config.CLOVA_MODEL,
@@ -749,9 +753,5 @@ def stream_answer(question: str, evidence: List[Dict], history: Optional[List[Di
                 return
             event = json.loads(raw)
             content = event.get("message", {}).get("content")
-            if not content:
-                continue
-            delta = content[len(previous_content) :] if content.startswith(previous_content) else content
-            previous_content = content
-            if delta:
-                yield delta
+            if content:
+                yield content
