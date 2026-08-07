@@ -93,11 +93,14 @@ export interface RecommendationResponse {
 
 /** url에는 이미 ?t={start}s 가 붙어 있다. */
 export interface Evidence {
+  chunk_id?: number
+  paragraph_id?: number | null
   video_id: number
   title: string
   start_seconds: number
   end_seconds: number
   quote: string
+  context?: string
   url: string
   score: number
 }
@@ -107,10 +110,20 @@ export interface ChatResponse {
   evidence: Evidence[]
 }
 
-/** GET /chat/history 의 항목. 서버는 근거는 저장하지 않고 텍스트만 남긴다. */
+/** GET /chat/history 의 항목. assistant 메시지는 저장된 근거 구간을 함께 돌려줄 수 있다. */
 export interface ChatMessage {
+  id: number
   role: 'user' | 'assistant'
   content: string
+  evidence?: Evidence[]
+  created_at: string | null
+}
+
+export interface ChatHistoryPage {
+  items: ChatMessage[]
+  messages?: ChatMessage[]
+  has_more: boolean
+  next_cursor: number | null
 }
 
 export const isAnalyzed = (status: AnalysisStatus) =>

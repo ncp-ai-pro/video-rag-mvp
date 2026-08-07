@@ -52,6 +52,70 @@ def test_metadata_recommendation_and_timestamped_rag():
         assert evidence[0]["url"].endswith("t=12s")
 
 
+def test_paragraph_context_groups_multiple_rag_chunks():
+    with tempfile.TemporaryDirectory() as directory:
+        os.environ["DATABASE_PATH"] = os.path.join(directory, "paragraph.db")
+        os.environ["EMBEDDING_PROVIDER"] = "mock"
+        os.environ["CHAT_PROVIDER"] = "mock"
+
+        from app import config, db, services, workspaces
+
+        importlib.reload(config)
+        importlib.reload(db)
+        importlib.reload(services)
+        importlib.reload(workspaces)
+        db.initialize()
+        workspace = workspaces.create_guest_workspace()
+        with db.connection() as conn:
+            channel_id = conn.execute(
+                "INSERT INTO channels(user_id, url, name) VALUES (?, ?, ?) RETURNING id",
+                (workspace["id"], "https://www.youtube.com/@paragraph", "paragraph"),
+            ).fetchone()["id"]
+
+        video_id = services.upsert_video(
+            channel_id,
+            {
+                "platform_video_id": "paragraph123",
+                "title": "문단 RAG 테스트",
+                "description": "문단과 작은 청크를 분리합니다.",
+                "url": "https://www.youtube.com/watch?v=paragraph123",
+            },
+        )
+        services.import_transcript(
+            video_id,
+            [
+                {
+                    "paragraph_index": 0,
+                    "chunk_index": 0,
+                    "start_seconds": 10,
+                    "end_seconds": 20,
+                    "text": "RAG 검색은 작은 청크를 기준으로 수행합니다.",
+                },
+                {
+                    "paragraph_index": 0,
+                    "chunk_index": 1,
+                    "start_seconds": 20,
+                    "end_seconds": 30,
+                    "text": "답변 컨텍스트는 같은 문단으로 확장합니다.",
+                },
+            ],
+            paragraphs=[
+                {
+                    "paragraph_index": 0,
+                    "start_seconds": 10,
+                    "end_seconds": 30,
+                    "text": "RAG 검색은 작은 청크를 기준으로 수행합니다. 답변 컨텍스트는 같은 문단으로 확장합니다.",
+                }
+            ],
+        )
+
+        evidence = services.find_evidence(workspace["id"], "RAG 검색 문단 컨텍스트", 3, video_id)
+        assert len(evidence) == 1
+        assert evidence[0]["paragraph_id"] is not None
+        assert evidence[0]["quote"] != evidence[0]["context"]
+        assert "답변 컨텍스트" in evidence[0]["context"]
+
+
 def test_guest_workspace_is_restored_or_connected_by_code():
     with tempfile.TemporaryDirectory() as directory:
         os.environ["DATABASE_PATH"] = os.path.join(directory, "workspace.db")
@@ -140,6 +204,12 @@ def test_chat_router_keeps_post_contract_and_workspace_scope():
             assert response.status_code == 200
             assert set(response.json()) == {"answer", "evidence"}
             assert response.json()["evidence"][0]["video_id"] == video["video_id"]
+            history = owner_chat.get("/chat/history")
+            assert history.status_code == 200
+            messages = history.json()["messages"]
+            assert [message["role"] for message in messages] == ["user", "assistant"]
+            assert messages[0]["content"] == "자막 근거"
+            assert messages[1]["evidence"][0]["video_id"] == video["video_id"]
 
             with owner_chat.stream("POST", "/chat/stream", json={"query": "자막 근거"}) as response:
                 assert response.status_code == 200
@@ -151,12 +221,31 @@ def test_chat_router_keeps_post_contract_and_workspace_scope():
             assert "event: done" in streamed
             assert '"text":"로컬 "' in streamed
             assert '"text":"테스트 "' in streamed
+            history = owner_chat.get("/chat/history")
+            assert history.status_code == 200
+            messages = history.json()["messages"]
+            assert [message["role"] for message in messages] == ["user", "assistant", "user", "assistant"]
+            assert messages[-1]["evidence"][0]["video_id"] == video["video_id"]
+            latest_page = owner_chat.get("/chat/history?limit=2")
+            assert latest_page.status_code == 200
+            latest_body = latest_page.json()
+            assert [message["role"] for message in latest_body["items"]] == ["user", "assistant"]
+            assert latest_body["has_more"] is True
+            previous_page = owner_chat.get(f"/chat/history?limit=2&before_id={latest_body['next_cursor']}")
+            assert previous_page.status_code == 200
+            previous_body = previous_page.json()
+            assert [message["role"] for message in previous_body["items"]] == ["user", "assistant"]
+            assert previous_body["has_more"] is False
 
         with TestClient(main.app) as other_workspace, TestClient(chat_main.app) as other_workspace_chat:
             assert other_workspace.get(f"/videos/{video['video_id']}").status_code == 404
             response = other_workspace_chat.post("/chat", json={"query": "자막 근거"})
             assert response.status_code == 200
             assert response.json()["evidence"] == []
+            history = other_workspace_chat.get("/chat/history")
+            assert history.status_code == 200
+            messages = history.json()["messages"]
+            assert messages[-1]["evidence"] == []
 
 
 def test_sse_streams_db_owned_analysis_progress_and_rejects_other_workspace():

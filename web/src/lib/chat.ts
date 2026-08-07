@@ -1,21 +1,29 @@
 import { CHAT_BASE, CHAT_CREDENTIALS } from "./config";
 import { ApiError } from "./api";
-import type { ChatMessage, ChatResponse, Evidence } from "./types";
+import type { ChatHistoryPage, ChatResponse, Evidence } from "./types";
 
 /**
  * 작업공간의 저장된 대화 기록을 불러온다. Chat 서버가 세션 쿠키로 작업공간을 식별한다.
- * 서버는 메시지 텍스트만 저장하고 근거(evidence)는 저장하지 않는다.
+ * assistant 메시지는 저장된 근거(evidence)를 함께 포함할 수 있다.
  */
-export async function fetchChatHistory(): Promise<ChatMessage[]> {
-  const response = await fetch(`${CHAT_BASE}/chat/history`, {
+export async function fetchChatHistory(options: { limit?: number; beforeId?: number | null } = {}): Promise<ChatHistoryPage> {
+  const params = new URLSearchParams({ limit: String(options.limit ?? 20) });
+  if (options.beforeId) params.set("before_id", String(options.beforeId));
+  const response = await fetch(`${CHAT_BASE}/chat/history?${params.toString()}`, {
     credentials: CHAT_CREDENTIALS,
     headers: { "Content-Type": "application/json" },
   });
   if (!response.ok) {
     throw new ApiError("대화 기록을 불러오지 못했습니다.", response.status);
   }
-  const body = (await response.json()) as { messages?: ChatMessage[] };
-  return body.messages ?? [];
+  const body = (await response.json()) as Partial<ChatHistoryPage>;
+  const items = body.items ?? body.messages ?? [];
+  return {
+    items,
+    messages: items,
+    has_more: Boolean(body.has_more),
+    next_cursor: body.next_cursor ?? null,
+  };
 }
 
 /**

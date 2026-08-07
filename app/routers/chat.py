@@ -1,20 +1,24 @@
 import json
-from typing import Dict
+from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from ..dependencies import current_workspace
 from ..schemas import ChatRequest
-from ..services import answer, find_evidence, record_chat_message, recent_chat_history, stream_answer
+from ..services import answer, find_evidence, paged_chat_history, record_chat_message, recent_chat_history, stream_answer
 
 
 router = APIRouter()
 
 
 @router.get("/chat/history")
-def chat_history(workspace: Dict = Depends(current_workspace)):
-    return {"messages": recent_chat_history(workspace["id"])}
+def chat_history(
+    limit: int = Query(default=20, ge=1, le=100),
+    before_id: Optional[int] = Query(default=None, ge=1),
+    workspace: Dict = Depends(current_workspace),
+):
+    return paged_chat_history(workspace["id"], limit=limit, before_id=before_id)
 
 
 @router.post("/chat")
@@ -23,7 +27,7 @@ def chat(payload: ChatRequest, workspace: Dict = Depends(current_workspace)):
     history = recent_chat_history(workspace["id"])
     answer_text = answer(payload.query, evidence, history)
     record_chat_message(workspace["id"], "user", payload.query)
-    record_chat_message(workspace["id"], "assistant", answer_text)
+    record_chat_message(workspace["id"], "assistant", answer_text, evidence)
     return {"answer": answer_text, "evidence": evidence}
 
 
@@ -45,7 +49,7 @@ def chat_stream(payload: ChatRequest, workspace: Dict = Depends(current_workspac
                 latest = text
                 yield sse("token", {"text": text})
             record_chat_message(workspace["id"], "user", payload.query)
-            record_chat_message(workspace["id"], "assistant", latest)
+            record_chat_message(workspace["id"], "assistant", latest, evidence)
             yield sse("done", {"evidence": evidence})
         except Exception as exc:
             yield sse("error", {"message": str(exc)})
