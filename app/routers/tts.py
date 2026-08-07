@@ -1,0 +1,65 @@
+import httpx
+import re
+
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
+
+from ..config import CLOVA_VOICE_CLIENT_ID, CLOVA_VOICE_CLIENT_SECRET
+from ..schemas import TTSRequest
+
+
+router = APIRouter()
+
+def split_text(text: str, max_len: int = 400) -> list[str]:
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    chunks, cur = [], ""
+    for s in sentences:
+        if len(cur) + len(s) > max_len:
+            if cur: chunks.append(cur)
+            cur = s
+        else:
+            cur = f"{cur} {s}".strip()
+    if cur: chunks.append(cur)
+    return [c for c in chunks if re.search(r"[가-힣a-zA-Z]", c)]
+
+def clean_for_tts(text: str) -> str:
+    """Strips markdown and list numbering that CLOVA renders as noise or long pauses."""
+    text = re.sub(r"\*+", "", text)
+    text = re.sub(r"[#`_~>|]", "", text)
+    text = re.sub(r"(?<=[.!?])(?=[^\s])", " ", text)
+    text = re.sub(r"(?m)^\s*(\d+)\.\s+", r"\1번, ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+CLOVA_VOICE_URL = "https://naveropenapi.apigw.ntruss.com/tts-premium/v1/tts"
+
+@router.post("/tts")
+async def create_speech(payload: TTSRequest):
+    if not CLOVA_VOICE_CLIENT_ID or not CLOVA_VOICE_CLIENT_SECRET:
+        raise HTTPException(status_code=503, detail="CLOVA Voice가 설정되어 있지 않습니다.")
+
+    headers = {
+        "X-NCP-APIGW-API-KEY-ID": CLOVA_VOICE_CLIENT_ID,
+        "X-NCP-APIGW-API-KEY": CLOVA_VOICE_CLIENT_SECRET,
+    }
+    chunks = split_text(clean_for_tts(payload.text))
+    print(f"[TTS] {len(chunks)} chunks: {[len(c) for c in chunks]}")
+    audio = bytearray()
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for i, chunk in enumerate(chunks, start=1):
+            response = await client.post(
+                CLOVA_VOICE_URL,
+                headers=headers,
+                data={"speaker": payload.speaker, "text": chunk, "format": "mp3", "speed": "0"},
+            )
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"CLOVA Voice error: {response.text}",
+                )
+            with open(f"chunk_{i}.mp3", "wb") as f:      # 디버깅용, 확인 끝나면 삭제
+                f.write(response.content)
+            print(f"[TTS] chunk {i}: {chunk!r}")   # 디버깅용, 확인 끝나면 삭제
+            audio.extend(response.content)
+
+    return Response(content=bytes(audio), media_type="audio/mpeg")

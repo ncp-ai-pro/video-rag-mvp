@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
+load_dotenv()
 
 ROOT = Path(__file__).resolve().parents[1]
 DATABASE_PATH = Path(os.getenv("DATABASE_PATH", ROOT / "data" / "video_rag.db"))
@@ -36,3 +38,6 @@ CORS_ALLOW_ORIGINS = tuple(
     origin.strip() for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if origin.strip()
 )
 CHAT_PUBLIC_ORIGIN = os.getenv("CHAT_PUBLIC_ORIGIN", "").rstrip("/")
+
+CLOVA_VOICE_CLIENT_ID = os.getenv("CLOVA_VOICE_CLIENT_ID", "")
+CLOVA_VOICE_CLIENT_SECRET = os.getenv("CLOVA_VOICE_CLIENT_SECRET", "")
