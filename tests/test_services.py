@@ -162,6 +162,16 @@ def test_chat_router_keeps_post_contract_and_workspace_scope():
             messages = history.json()["messages"]
             assert [message["role"] for message in messages] == ["user", "assistant", "user", "assistant"]
             assert messages[-1]["evidence"][0]["video_id"] == video["video_id"]
+            latest_page = owner_chat.get("/chat/history?limit=2")
+            assert latest_page.status_code == 200
+            latest_body = latest_page.json()
+            assert [message["role"] for message in latest_body["items"]] == ["user", "assistant"]
+            assert latest_body["has_more"] is True
+            previous_page = owner_chat.get(f"/chat/history?limit=2&before_id={latest_body['next_cursor']}")
+            assert previous_page.status_code == 200
+            previous_body = previous_page.json()
+            assert [message["role"] for message in previous_body["items"]] == ["user", "assistant"]
+            assert previous_body["has_more"] is False
 
         with TestClient(main.app) as other_workspace, TestClient(chat_main.app) as other_workspace_chat:
             assert other_workspace.get(f"/videos/{video['video_id']}").status_code == 404

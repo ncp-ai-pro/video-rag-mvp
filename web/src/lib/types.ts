@@ -109,9 +109,18 @@ export interface ChatResponse {
 
 /** GET /chat/history 의 항목. assistant 메시지는 저장된 근거 구간을 함께 돌려줄 수 있다. */
 export interface ChatMessage {
+  id: number
   role: 'user' | 'assistant'
   content: string
   evidence?: Evidence[]
+  created_at: string | null
+}
+
+export interface ChatHistoryPage {
+  items: ChatMessage[]
+  messages?: ChatMessage[]
+  has_more: boolean
+  next_cursor: number | null
 }
 
 export const isAnalyzed = (status: AnalysisStatus) =>

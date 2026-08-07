@@ -672,6 +672,52 @@ def recent_chat_history(user_id: int, *, include_evidence: bool = False) -> List
     return history
 
 
+def _chat_message_item(row: Dict) -> Dict:
+    created_at = row["created_at"]
+    if isinstance(created_at, datetime):
+        created_at = created_at.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    elif created_at and "T" not in created_at:
+        created_at = str(created_at).replace(" ", "T") + "Z"
+    try:
+        evidence = json.loads(row["evidence_json"]) if row["evidence_json"] else []
+    except (TypeError, ValueError, json.JSONDecodeError):
+        evidence = []
+    return {
+        "id": row["id"],
+        "role": row["role"],
+        "content": row["content"],
+        "evidence": evidence,
+        "created_at": created_at,
+    }
+
+
+def paged_chat_history(user_id: int, *, limit: int = 20, before_id: Optional[int] = None) -> Dict:
+    """Returns a cursor page for UI history; LLM context still uses recent_chat_history()."""
+    page_size = min(max(limit, 1), 100)
+    query = """
+        SELECT id, role, content, evidence_json, created_at
+        FROM chat_messages
+        WHERE user_id=?
+    """
+    params: List = [user_id]
+    if before_id is not None:
+        query += " AND id < ?"
+        params.append(before_id)
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(page_size + 1)
+    with connection() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    has_more = len(rows) > page_size
+    rows = rows[:page_size]
+    items = [_chat_message_item(row) for row in reversed(rows)]
+    return {
+        "items": items,
+        "messages": items,
+        "has_more": has_more,
+        "next_cursor": items[0]["id"] if has_more and items else None,
+    }
+
+
 def _chat_instruction(evidence: List[Dict]) -> str:
     context = "\n\n".join(
         "[{} {}-{}]\n{}".format(item["title"], item["start_seconds"], item["end_seconds"], item["quote"])
