@@ -35,6 +35,7 @@ class SearchRequest(BaseModel):
 
 class ChatRequest(SearchRequest):
     limit: int = Field(default=3, ge=1, le=3)
+    video_id: Optional[int] = None
 
 
 class WorkspaceConnect(BaseModel):
