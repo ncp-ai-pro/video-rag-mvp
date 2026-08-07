@@ -562,8 +562,10 @@ def find_metadata(user_id: int, query: str, limit: int) -> List[Dict]:
     return sorted(results, key=lambda item: item["score"], reverse=True)[:limit]
 
 
-def find_evidence(user_id: int, query: str, limit: int) -> List[Dict]:
+def find_evidence(user_id: int, query: str, limit: int, video_id: Optional[int] = None) -> List[Dict]:
     query_vector = embedding(query)
+    video_filter = " AND videos.id=?" if video_id is not None else ""
+    video_params = (video_id,) if video_id is not None else ()
     with connection() as conn:
         if is_postgres():
             rows = conn.execute(
@@ -574,11 +576,13 @@ def find_evidence(user_id: int, query: str, limit: int) -> List[Dict]:
                 FROM transcript_chunks AS chunks
                 JOIN videos ON videos.id = chunks.video_id
                 JOIN channels ON channels.id = videos.channel_id
-                WHERE videos.analysis_status IN ('succeeded', 'ready') AND channels.user_id=?
+                WHERE videos.analysis_status IN ('succeeded', 'ready') AND channels.user_id=?"""
+                + video_filter
+                + """
                 ORDER BY chunks.embedding <=> ?::vector
                 LIMIT ?
                 """,
-                (json.dumps(query_vector), user_id, json.dumps(query_vector), limit),
+                (json.dumps(query_vector), user_id, *video_params, json.dumps(query_vector), limit),
             ).fetchall()
             evidence = []
             for row in rows:
@@ -602,9 +606,11 @@ def find_evidence(user_id: int, query: str, limit: int) -> List[Dict]:
             FROM transcript_chunks AS chunks
             JOIN videos ON videos.id = chunks.video_id
             JOIN channels ON channels.id = videos.channel_id
-            WHERE videos.analysis_status IN ('succeeded', 'ready') AND channels.user_id=?
+            WHERE videos.analysis_status IN ('succeeded', 'ready') AND channels.user_id=?"""
+            + video_filter
+            + """
             """,
-            (user_id,),
+            (user_id, *video_params),
         ).fetchall()
     evidence = []
     for row in rows:

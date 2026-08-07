@@ -169,7 +169,7 @@
       chatTurns.push(assistantTurn);
       renderLog();
       try {
-        await streamChat('/chat/stream', {method:'POST', body:JSON.stringify({query})}, (type, data) => {
+        await streamChat('/chat/stream', {method:'POST', body:JSON.stringify({query, video_id: selectedVideo ? selectedVideo.id : null})}, (type, data) => {
           if (type === 'evidence') assistantTurn.evidence = data.evidence || [];
           if (type === 'token') { assistantTurn.content += data.text || ''; renderLog(); }
           if (type === 'done') { assistantTurn.evidence = data.evidence || assistantTurn.evidence; renderLog(); }
