@@ -261,11 +261,17 @@ def analyze_video(job_id: int, video_id: int):
         segments = normalize_clova_speech_segments(speech_payload)
         store_normalized_transcript(video_id, job_id, "clova_speech", segments)
     update_analysis_progress(job_id, video_id, "chunking")
-    chunks = build_rag_chunks(segments)
+    paragraphs, chunks = build_rag_documents(segments)
     if not chunks:
         raise RuntimeError("chunking_failed: no searchable transcript chunks")
     update_analysis_progress(job_id, video_id, "embedding")
-    import_transcript(video_id, chunks, mark_analyzed=False, embed_text=WORKER_EMBEDDING_LIMITER.embed)
+    import_transcript(
+        video_id,
+        chunks,
+        paragraphs=paragraphs,
+        mark_analyzed=False,
+        embed_text=WORKER_EMBEDDING_LIMITER.embed,
+    )
 
 
 def parse_timestamp(value: str) -> float:
@@ -313,12 +319,9 @@ def _caption_delta(previous: str, current: str) -> str:
     return current
 
 
-def build_rag_chunks(segments):
-    """Merges subtitle cues into bounded, non-duplicated RAG documents for embedding."""
-    chunks = []
-    current_text, current_start, current_end = [], None, None
+def _normalized_caption_units(segments):
+    units = []
     previous_caption = ""
-
     for segment in segments:
         text = " ".join(str(segment.get("text") or "").split())
         try:
@@ -334,24 +337,97 @@ def build_rag_chunks(segments):
             previous_caption = text
         if not delta:
             continue
+        units.append({"start_seconds": start, "end_seconds": end, "text": delta})
+    return units
 
-        candidate_text = " ".join(current_text + [delta])
-        exceeds_duration = current_start is not None and end - current_start > config.WORKER_RAG_CHUNK_MAX_SECONDS
-        exceeds_size = current_text and len(candidate_text) > config.WORKER_RAG_CHUNK_MAX_CHARS
-        if exceeds_duration or exceeds_size:
-            chunks.append(
-                {"start_seconds": current_start, "end_seconds": current_end, "text": " ".join(current_text)}
+
+def _looks_like_sentence_end(text: str) -> bool:
+    return bool(re.search(r"([.!?。！？]|(다|요|죠|니다|습니다|네요|거예요|겁니다))\s*$", text))
+
+
+def _merge_caption_units(units, *, max_seconds: float, max_chars: int, paragraph_mode: bool = False):
+    groups = []
+    current_text, current_start, current_end = [], None, None
+    current_units = []
+
+    def flush():
+        nonlocal current_text, current_start, current_end, current_units
+        if current_text and current_start is not None and current_end is not None:
+            groups.append(
+                {
+                    "start_seconds": current_start,
+                    "end_seconds": current_end,
+                    "text": " ".join(current_text),
+                    "units": current_units,
+                }
             )
-            current_text, current_start = [], None
+        current_text, current_start, current_end, current_units = [], None, None, []
+
+    for index, unit in enumerate(units):
+        delta = unit["text"]
+        start = unit["start_seconds"]
+        end = unit["end_seconds"]
+        candidate_text = " ".join(current_text + [delta])
+        exceeds_duration = current_start is not None and end - current_start > max_seconds
+        exceeds_size = current_text and len(candidate_text) > max_chars
+        if exceeds_duration or exceeds_size:
+            flush()
 
         if current_start is None:
             current_start = start
         current_end = end
         current_text.append(delta)
+        current_units.append(unit)
 
-    if current_text and current_start is not None and current_end is not None:
-        chunks.append({"start_seconds": current_start, "end_seconds": current_end, "text": " ".join(current_text)})
-    return chunks
+        if paragraph_mode:
+            next_start = units[index + 1]["start_seconds"] if index + 1 < len(units) else None
+            pause = next_start - end if next_start is not None else 0
+            long_enough = current_start is not None and end - current_start >= 10
+            if long_enough and _looks_like_sentence_end(" ".join(current_text)) and pause >= 0.6:
+                flush()
+
+    flush()
+    return groups
+
+
+def build_rag_documents(segments):
+    """Builds paragraph groups for context and smaller chunks for vector search."""
+    units = _normalized_caption_units(segments)
+    paragraphs = _merge_caption_units(
+        units,
+        max_seconds=config.WORKER_PARAGRAPH_MAX_SECONDS,
+        max_chars=config.WORKER_PARAGRAPH_MAX_CHARS,
+        paragraph_mode=True,
+    )
+    chunks = []
+    for paragraph_index, paragraph in enumerate(paragraphs):
+        paragraph["paragraph_index"] = paragraph_index
+        for chunk_index, chunk in enumerate(
+            _merge_caption_units(
+                paragraph["units"],
+                max_seconds=config.WORKER_RAG_CHUNK_MAX_SECONDS,
+                max_chars=config.WORKER_RAG_CHUNK_MAX_CHARS,
+            )
+        ):
+            chunks.append(
+                {
+                    "paragraph_index": paragraph_index,
+                    "chunk_index": chunk_index,
+                    "start_seconds": chunk["start_seconds"],
+                    "end_seconds": chunk["end_seconds"],
+                    "text": chunk["text"],
+                }
+            )
+        paragraph.pop("units", None)
+    return paragraphs, chunks
+
+
+def build_rag_chunks(segments):
+    """Backward-compatible helper for tests and manual checks."""
+    return [
+        {"start_seconds": chunk["start_seconds"], "end_seconds": chunk["end_seconds"], "text": chunk["text"]}
+        for chunk in build_rag_documents(segments)[1]
+    ]
 
 
 def run_once():
