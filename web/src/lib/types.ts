@@ -92,6 +92,14 @@ export interface RecommendationResponse {
 }
 
 /** url에는 이미 ?t={start}s 가 붙어 있다. */
+export type EvidenceMode = 'simple' | 'precise'
+
+export interface EvidenceHighlight {
+  text: string
+  method: 'query_token_overlap'
+  score: number
+}
+
 export interface Evidence {
   chunk_id?: number
   paragraph_id?: number | null
@@ -101,6 +109,9 @@ export interface Evidence {
   end_seconds: number
   quote: string
   context?: string
+  rank?: number
+  is_primary?: boolean
+  highlight?: EvidenceHighlight
   url: string
   score: number
 }

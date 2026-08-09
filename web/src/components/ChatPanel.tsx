@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { fetchChatHistory, streamChat } from '@/lib/chat'
 import { formatTimestamp, playbackUrl, youtubeIdFromUrl } from '@/lib/format'
-import type { ChatMessage, Evidence } from '@/lib/types'
+import type { ChatMessage, Evidence, EvidenceMode } from '@/lib/types'
 
 /**
  * 한 번의 질문·답변·근거. 대화는 백엔드(GET /chat/history)에 작업공간별로 저장된다.
@@ -56,6 +56,7 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
   const [turns, setTurns] = useState<ChatTurn[]>([])
   const [query, setQuery] = useState('')
   const [streaming, setStreaming] = useState(false)
+  const [evidenceMode, setEvidenceMode] = useState<EvidenceMode>('simple')
   const [historyCursor, setHistoryCursor] = useState<number | null>(null)
   const [historyHasMore, setHistoryHasMore] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -156,7 +157,7 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
               break
           }
         },
-        { signal: controller.signal, videoId },
+        { evidenceMode, signal: controller.signal, videoId },
       )
       patch((turn) => (turn.status === 'streaming' ? { ...turn, status: 'done' } : turn))
     } catch (error) {
@@ -172,6 +173,21 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
     const youtubeId = youtubeIdFromUrl(item.url)
     if (youtubeId) onSeek(youtubeId, item.start_seconds)
     else window.open(playbackUrl(item.url), '_blank', 'noreferrer')
+  }
+
+  const quoteWithHighlight = (item: Evidence) => {
+    const quote = item.quote
+    const highlight = item.highlight?.text
+    if (!highlight) return quote
+    const index = quote.indexOf(highlight)
+    if (index < 0) return quote
+    return (
+      <>
+        {quote.slice(0, index)}
+        <strong className="font-semibold text-foreground">{highlight}</strong>
+        {quote.slice(index + highlight.length)}
+      </>
+    )
   }
 
   return (
@@ -232,27 +248,39 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
 
               {/* 근거 구간 */}
               {turn.evidence.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs font-medium text-muted-foreground">근거 구간</p>
-                  <ul className="space-y-2">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[0.72rem] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                      참고 구간
+                    </p>
+                    <p className="text-[0.72rem] text-muted-foreground">클릭하면 영상 위치로 이동</p>
+                  </div>
+                  <ul className="space-y-1.5">
                     {turn.evidence.map((item) => (
                       <li key={`${item.video_id}-${item.start_seconds}`}>
                         <button
                           type="button"
                           onClick={() => seekTo(item)}
-                          className="group w-full rounded-lg border border-border/60 bg-card p-2.5 text-left transition-colors hover:border-primary/60 hover:bg-accent"
+                          className={`group w-full rounded-xl border px-3 py-2 text-left transition-colors hover:border-foreground/20 hover:bg-muted/40 ${
+                            item.is_primary
+                              ? 'border-foreground/15 bg-background shadow-[inset_2px_0_0_hsl(var(--foreground)/0.28)]'
+                              : 'border-border/60 bg-background/70'
+                          }`}
                         >
-                          <div className="flex items-center gap-2">
-                            <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary/15 text-primary group-hover:bg-primary group-hover:text-primary-foreground">
-                              <Play className="size-3.5" />
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 font-mono text-[0.68rem] text-muted-foreground">
+                              <Play className="size-3" />
+                              {formatTimestamp(item.start_seconds)}–{formatTimestamp(item.end_seconds)}
                             </span>
-                            <span className="truncate text-xs font-medium">{item.title}</span>
-                            <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
-                              {formatTimestamp(item.start_seconds)} – {formatTimestamp(item.end_seconds)}
-                            </span>
+                            {item.is_primary && (
+                              <span className="rounded-full border border-border/70 px-1.5 py-0.5 text-[0.65rem] font-medium text-foreground/70">
+                                주요
+                              </span>
+                            )}
+                            <span className="min-w-0 truncate text-muted-foreground">{item.title}</span>
                           </div>
-                          <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">
-                            {item.quote}
+                          <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-foreground/75">
+                            {quoteWithHighlight(item)}
                           </p>
                         </button>
                       </li>
@@ -266,17 +294,42 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
       </div>
 
       {/* 입력 */}
-      <form onSubmit={ask} className="flex gap-2 border-t border-border/60 p-3">
-        <Input
-          value={query}
-          placeholder="영상에 대해 질문하기"
-          aria-label="RAG 질문"
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        <Button type="submit" disabled={streaming || !query.trim()}>
-          {streaming ? '생성 중…' : '질문'}
-        </Button>
-      </form>
+      <div className="border-t border-border/60 p-3">
+        <div className="mb-2 flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">근거</span>
+          <div className="inline-flex overflow-hidden rounded-full border border-border/70 bg-background">
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className={`rounded-none px-3 ${evidenceMode === 'simple' ? 'bg-foreground text-background hover:bg-foreground/90 hover:text-background' : 'text-muted-foreground'}`}
+              onClick={() => setEvidenceMode('simple')}
+            >
+              기본
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className={`rounded-none px-3 ${evidenceMode === 'precise' ? 'bg-foreground text-background hover:bg-foreground/90 hover:text-background' : 'text-muted-foreground'}`}
+              onClick={() => setEvidenceMode('precise')}
+            >
+              문장 강조
+            </Button>
+          </div>
+        </div>
+        <form onSubmit={ask} className="flex gap-2">
+          <Input
+            value={query}
+            placeholder="영상에 대해 질문하기"
+            aria-label="RAG 질문"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <Button type="submit" disabled={streaming || !query.trim()}>
+            {streaming ? '생성 중…' : '질문'}
+          </Button>
+        </form>
+      </div>
     </div>
   )
 }

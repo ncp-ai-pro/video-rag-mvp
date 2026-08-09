@@ -604,7 +604,49 @@ def find_metadata(user_id: int, query: str, limit: int) -> List[Dict]:
     return sorted(results, key=lambda item: item["score"], reverse=True)[:limit]
 
 
-def find_evidence(user_id: int, query: str, limit: int, video_id: Optional[int] = None) -> List[Dict]:
+def _split_evidence_sentences(text: str) -> List[str]:
+    sentences = [match.group(0).strip() for match in re.finditer(r"[^.!?。！？]+(?:[.!?。！？]+|$)", text)]
+    return [sentence for sentence in sentences if sentence]
+
+
+def _token_overlap_highlight(query: str, text: str) -> Optional[Dict]:
+    query_tokens = set(_tokens(query))
+    if not query_tokens:
+        return None
+    best_sentence, best_matches = "", 0
+    for sentence in _split_evidence_sentences(text):
+        sentence_tokens = set(_tokens(sentence))
+        matches = sum(
+            1
+            for query_token in query_tokens
+            if any(query_token in sentence_token or sentence_token in query_token for sentence_token in sentence_tokens)
+        )
+        if matches > best_matches:
+            best_sentence, best_matches = sentence, matches
+    if not best_sentence or best_matches == 0:
+        return None
+    return {
+        "text": best_sentence,
+        "method": "query_token_overlap",
+        "score": round(best_matches / len(query_tokens), 4),
+    }
+
+
+def _decorate_evidence(evidence: List[Dict], query: str, evidence_mode: str) -> List[Dict]:
+    decorated = []
+    for index, item in enumerate(evidence, start=1):
+        enriched = {**item, "rank": index, "is_primary": index == 1}
+        if evidence_mode == "precise":
+            highlight = _token_overlap_highlight(query, item.get("quote") or item.get("context") or "")
+            if highlight:
+                enriched["highlight"] = highlight
+        decorated.append(enriched)
+    return decorated
+
+
+def find_evidence(
+    user_id: int, query: str, limit: int, video_id: Optional[int] = None, evidence_mode: str = "simple"
+) -> List[Dict]:
     query_vector = embedding(query)
     video_filter = " AND videos.id=?" if video_id is not None else ""
     video_params = (video_id,) if video_id is not None else ()
@@ -654,7 +696,7 @@ def find_evidence(user_id: int, query: str, limit: int, video_id: Optional[int] 
                 )
                 if len(evidence) >= limit:
                     break
-            return evidence
+            return _decorate_evidence(evidence, query, evidence_mode)
         rows = conn.execute(
             """
             SELECT chunks.id AS chunk_id, chunks.paragraph_id,
@@ -698,7 +740,7 @@ def find_evidence(user_id: int, query: str, limit: int, video_id: Optional[int] 
         deduped.append(item)
         if len(deduped) >= limit:
             break
-    return deduped
+    return _decorate_evidence(deduped, query, evidence_mode)
 
 
 def record_chat_message(user_id: int, role: str, content: str, evidence: Optional[List[Dict]] = None) -> None:

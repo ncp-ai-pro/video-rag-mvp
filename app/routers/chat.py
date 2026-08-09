@@ -23,7 +23,7 @@ def chat_history(
 
 @router.post("/chat")
 def chat(payload: ChatRequest, workspace: Dict = Depends(current_workspace)):
-    evidence = find_evidence(workspace["id"], payload.query, payload.limit, payload.video_id)
+    evidence = find_evidence(workspace["id"], payload.query, payload.limit, payload.video_id, payload.evidence_mode)
     history = recent_chat_history(workspace["id"])
     answer_text = answer(payload.query, evidence, history)
     record_chat_message(workspace["id"], "user", payload.query)
@@ -34,7 +34,7 @@ def chat(payload: ChatRequest, workspace: Dict = Depends(current_workspace)):
 @router.post("/chat/stream")
 def chat_stream(payload: ChatRequest, workspace: Dict = Depends(current_workspace)):
     """POST SSE: browser receives our stable events, not raw CLOVA event shapes."""
-    evidence = find_evidence(workspace["id"], payload.query, payload.limit, payload.video_id)
+    evidence = find_evidence(workspace["id"], payload.query, payload.limit, payload.video_id, payload.evidence_mode)
     history = recent_chat_history(workspace["id"])
 
     def sse(event: str, data: Dict) -> str:
