@@ -52,6 +52,74 @@ def test_metadata_recommendation_and_timestamped_rag():
         assert evidence[0]["url"].endswith("t=12s")
 
 
+def test_collect_channel_metadata_accepts_single_video_url(monkeypatch):
+    from app import services
+
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps(
+                {
+                    "id": "eOqXQqg0_Dw",
+                    "title": "단일 영상 메타데이터",
+                    "description": "채널 칸에 영상 URL을 넣어도 메타데이터를 수집합니다.",
+                    "webpage_url": "https://www.youtube.com/watch?v=eOqXQqg0_Dw",
+                    "duration": 123,
+                    "upload_date": "20260808",
+                }
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(services.subprocess, "run", fake_run)
+
+    videos = services.collect_channel_metadata("https://www.youtube.com/watch?v=eOqXQqg0_Dw")
+
+    assert commands[0][1:4] == ["--dump-single-json", "--skip-download", "--no-playlist"]
+    assert videos == [
+        {
+            "platform_video_id": "eOqXQqg0_Dw",
+            "title": "단일 영상 메타데이터",
+            "description": "채널 칸에 영상 URL을 넣어도 메타데이터를 수집합니다.",
+            "url": "https://www.youtube.com/watch?v=eOqXQqg0_Dw",
+            "thumbnail_url": None,
+            "duration_seconds": 123,
+            "uploaded_at": "20260808",
+        }
+    ]
+
+
+def test_collect_channel_metadata_keeps_flat_playlist_for_channel_urls(monkeypatch):
+    from app import services
+
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            "\n".join(
+                [
+                    json.dumps({"id": "video1", "title": "첫 영상"}),
+                    json.dumps({"id": "video2", "title": "둘째 영상"}),
+                ]
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(services.subprocess, "run", fake_run)
+
+    videos = services.collect_channel_metadata("https://www.youtube.com/@example")
+
+    assert commands[0][1:4] == ["--flat-playlist", "--dump-json", "--skip-download"]
+    assert [video["platform_video_id"] for video in videos] == ["video1", "video2"]
+
+
 def test_guest_workspace_is_restored_or_connected_by_code():
     with tempfile.TemporaryDirectory() as directory:
         os.environ["DATABASE_PATH"] = os.path.join(directory, "workspace.db")

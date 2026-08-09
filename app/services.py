@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Iterator, List, Optional
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -433,32 +434,72 @@ def upsert_video(channel_id: int, raw: Dict) -> int:
         return row["id"]
 
 
+def _yt_dlp_failure_message(result: subprocess.CompletedProcess) -> str:
+    output = "\n".join(part for part in (result.stderr, result.stdout) if part)
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    error_lines = [line for line in lines if "error:" in line.lower()]
+    return (error_lines or lines or ["yt-dlp exited without an error message"])[-1][:500]
+
+
+def _youtube_video_id(url: str) -> Optional[str]:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower().removeprefix("www.").removeprefix("m.")
+    if host == "youtu.be":
+        return parsed.path.strip("/").split("/", 1)[0] or None
+    if host not in {"youtube.com", "music.youtube.com"}:
+        return None
+    if parsed.path == "/watch":
+        return parse_qs(parsed.query).get("v", [None])[0]
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) >= 2 and parts[0] in {"shorts", "embed", "live"}:
+        return parts[1]
+    return None
+
+
+def _video_metadata_from_ytdlp(item: Dict, fallback_video_id: Optional[str] = None) -> Dict:
+    video_id = item.get("id") or fallback_video_id
+    if not video_id:
+        raise RuntimeError("yt-dlp did not return a video id")
+    return {
+        "platform_video_id": video_id,
+        "title": item.get("title") or video_id,
+        "description": item.get("description") or "",
+        "url": item.get("webpage_url") or "https://www.youtube.com/watch?v=" + video_id,
+        "thumbnail_url": item.get("thumbnail"),
+        "duration_seconds": item.get("duration"),
+        "uploaded_at": item.get("upload_date"),
+    }
+
+
 def collect_channel_metadata(url: str) -> List[Dict]:
-    """Fetches playlist entries only; --flat-playlist never downloads media."""
+    """Fetches channel/playlist metadata, or a single video when the registered URL is a watch URL."""
+    single_video_id = _youtube_video_id(url)
+    if single_video_id:
+        result = subprocess.run(
+            [config.YTDLP_BIN, "--dump-single-json", "--skip-download", "--no-playlist", url],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode:
+            raise RuntimeError("video_metadata_failed: " + _yt_dlp_failure_message(result))
+        return [_video_metadata_from_ytdlp(json.loads(result.stdout), single_video_id)]
+
     result = subprocess.run(
         [config.YTDLP_BIN, "--flat-playlist", "--dump-json", "--skip-download", url],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         timeout=300,
     )
+    if result.returncode:
+        raise RuntimeError("channel_metadata_failed: " + _yt_dlp_failure_message(result))
     videos = []
     for line in result.stdout.splitlines():
-        item = json.loads(line)
-        video_id = item.get("id")
-        if not video_id:
+        if not line.strip():
             continue
-        videos.append(
-            {
-                "platform_video_id": video_id,
-                "title": item.get("title") or video_id,
-                "description": item.get("description") or "",
-                "url": item.get("webpage_url") or "https://www.youtube.com/watch?v=" + video_id,
-                "thumbnail_url": item.get("thumbnail"),
-                "duration_seconds": item.get("duration"),
-                "uploaded_at": item.get("upload_date"),
-            }
-        )
+        videos.append(_video_metadata_from_ytdlp(json.loads(line)))
     return videos
 
 
