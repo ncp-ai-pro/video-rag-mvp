@@ -1,4 +1,4 @@
-# Video RAG MVP (local) ......
+# Video RAG MVP (local)
 
 여러 YouTube 채널의 **메타데이터만** 먼저 수집하고, 사용자가 선택한 영상만 자막/음성 기반 RAG로 분석하는 FastAPI 프로토타입입니다.
 
