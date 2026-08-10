@@ -1,8 +1,16 @@
 name: video-rag-mvp
 
+x-app-build: &app-build
+  context: .
+  args:
+    # Empty is correct for local all-in-one API serving.
+    # Nginx production builds can set VITE_API_BASE=/api if the UI is served by Web.
+    VITE_API_BASE: ${VITE_API_BASE:-}
+    VITE_CHAT_BASE: ${VITE_CHAT_BASE:-}
+
 services:
   api:
-    build: .
+    build: *app-build
     image: video-rag-mvp:latest
     env_file:
       - path: .env
@@ -32,7 +40,7 @@ services:
       start_period: 10s
 
   chat:
-    build: .
+    build: *app-build
     image: video-rag-mvp:latest
     command: ["uvicorn", "app.chat_main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
     env_file:
@@ -64,7 +72,7 @@ services:
       start_period: 10s
 
   worker:
-    build: .
+    build: *app-build
     image: video-rag-mvp:latest
     command: ["python", "-m", "app.worker"]
     env_file:

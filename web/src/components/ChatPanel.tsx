@@ -10,20 +10,23 @@ import type { Evidence } from "@/api/types";
 interface Props {
   /** 작업공간이 바뀌면 그 작업공간의 대화 기록을 다시 불러온다. */
   workspaceCode: string | null;
-  /** 선택된 영상 ID. 있으면 그 영상으로 근거를 좁혀 질문한다. */
+  /** 선택된 영상 ID. 대화는 영상 단위로 저장·조회되므로 없으면 질문할 수 없다. */
   videoId: number | null;
+  /** 선택된 영상 제목. 대화 대상 표시용이다. */
+  videoTitle?: string | null;
   /** 근거 클릭 시 플레이어를 해당 영상·시점으로 이동시킨다. */
   onSeek: (youtubeId: string, seconds: number) => void;
   onError: (message: string) => void;
 }
 
-export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
+export function ChatPanel({ workspaceCode, videoId, videoTitle, onSeek, onError }: Props) {
   const {
     turns,
     query,
     setQuery,
     streaming,
     ask,
+    canAsk,
     evidenceMode,
     setEvidenceMode,
     historyHasMore,
@@ -84,10 +87,12 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border/60 px-4 py-2.5">
         <span className="text-sm font-medium">대화</span>
-        <span className="text-xs text-muted-foreground">작업공간에 저장됨</span>
+        <span className="max-w-[66%] truncate text-xs text-muted-foreground">
+          {videoTitle ? `질문 대상: ${videoTitle}` : "영상을 선택하세요"}
+        </span>
       </div>
 
-      {/* 대화 (백엔드 저장) */}
+      {/* 대화 (백엔드 저장, 영상 단위) */}
       <div
         ref={scrollRef}
         className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4"
@@ -105,7 +110,9 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
 
         {turns.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            분석이 끝난 자막에서 근거를 찾아 답합니다. 아래에 질문을 입력하세요.
+            {canAsk
+              ? "이 영상에서 분석된 자막 근거를 찾아 답합니다. 아래에 질문을 입력하세요."
+              : "왼쪽 목록에서 질문할 영상을 먼저 선택하세요."}
           </p>
         )}
 
@@ -206,16 +213,26 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
             >
               문장 강조
             </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className={`rounded-none px-3 ${evidenceMode === "ultra" ? "bg-foreground text-background hover:bg-foreground/90 hover:text-background" : "text-muted-foreground"}`}
+              onClick={() => setEvidenceMode("ultra")}
+            >
+              의미 강조
+            </Button>
           </div>
         </div>
         <form onSubmit={submit} className="flex gap-2">
           <Input
             value={query}
-            placeholder="영상에 대해 질문하기"
+            placeholder={canAsk ? "영상에 대해 질문하기" : "질문할 영상을 먼저 선택하세요"}
             aria-label="RAG 질문"
+            disabled={!canAsk}
             onChange={(event) => setQuery(event.target.value)}
           />
-          <Button type="submit" disabled={streaming || !query.trim()}>
+          <Button type="submit" disabled={streaming || !canAsk || !query.trim()}>
             {streaming ? "생성 중…" : "질문"}
           </Button>
         </form>

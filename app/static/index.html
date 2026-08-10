@@ -55,8 +55,8 @@
         </div>
         <div class="block">
           <label for="chat-query" class="name">RAG 질문</label>
-          <p class="analysis-note">분석 완료된 자막에서 근거 구간을 최대 3개 반환합니다. 최근 3턴의 대화 맥락이 유지됩니다.</p>
-          <div class="controls"><span class="meta">근거</span><div class="segmented" role="group" aria-label="근거 표시 모드"><button type="button" id="mode-simple" class="active">기본</button><button type="button" id="mode-precise">문장 강조</button></div></div>
+          <p class="analysis-note">선택한 영상의 자막에서 근거 구간을 최대 3개 반환합니다. 최근 3턴의 대화 맥락은 영상별로 유지됩니다.</p>
+          <div class="controls"><span class="meta">근거</span><div class="segmented" role="group" aria-label="근거 표시 모드"><button type="button" id="mode-simple" class="active">기본</button><button type="button" id="mode-precise">문장 강조</button><button type="button" id="mode-ultra">의미 강조</button></div></div>
           <form id="chat-form"><input id="chat-query" placeholder="영상에서 RAG 구축 순서를 설명해줘"><button>질문</button></form>
           <div id="answer" class="chat-log"></div>
         </div>
@@ -160,17 +160,30 @@
       if (selectedVideo) selectedVideo = videos.find(video => video.id === selectedVideo.id) || null;
       if (!selectedVideo) selectedVideo = videos.find(video => isAnalysisActive(video.analysis_status)) || null;
       byId('videos').innerHTML = videos.length ? videos.map(video => `<button class="video ${selectedVideo && video.id === selectedVideo.id ? 'selected' : ''}" data-video-id="${video.id}"><span class="name">${esc(video.title)}</span><span class="meta">${video.uploaded_at || '업로드일 미확인'} · <span class="tag ${statusClass(video.analysis_status)}">${esc(video.analysis_status)}</span></span></button>`).join('') : '<p class="empty">메타데이터가 없습니다. 새 영상 탐색을 실행하고 Worker가 끝날 때까지 기다리세요.</p>';
-      byId('videos').querySelectorAll('[data-video-id]').forEach(button => { const video = videos.find(item => item.id === Number(button.dataset.videoId)); button.onclick = () => { selectedVideo = video; subscribeToSelectedVideoIfNeeded(); loadVideos(); renderSelectedVideo(); }; });
+      byId('videos').querySelectorAll('[data-video-id]').forEach(button => { const video = videos.find(item => item.id === Number(button.dataset.videoId)); button.onclick = () => { selectedVideo = video; chatTurns = []; chatHistoryCursor = null; chatHistoryHasMore = false; subscribeToSelectedVideoIfNeeded(); loadVideos(); renderSelectedVideo(); loadChatHistory(); }; });
       subscribeToSelectedVideoIfNeeded();
     }
     function renderSelectedVideo() {
-      const container = byId('selected-video'); if (!selectedVideo) { container.innerHTML = '<p class="empty">RAG로 분석할 영상을 선택하세요. 메타데이터 추천은 분석하지 않은 영상도 찾습니다.</p>'; return; }
+      const container = byId('selected-video'); if (!selectedVideo) { container.innerHTML = '<p class="empty">RAG로 분석할 영상을 선택하세요. 메타데이터 추천은 분석하지 않은 영상도 찾습니다.</p>'; updateChatTarget(); return; }
       const error = selectedVideo.analysis_error ? `<p class="analysis-note">오류: ${esc(selectedVideo.analysis_error)}</p>` : '';
       const progress = selectedVideo.analysis_stage ? `<p class="analysis-note">진행: <strong>${esc(selectedVideo.analysis_stage)}</strong>${selectedVideo.analysis_message ? ` · ${esc(selectedVideo.analysis_message)}` : ''}</p>` : '';
       const disabled = isAnalyzed(selectedVideo.analysis_status) || isAnalysisActive(selectedVideo.analysis_status);
       const buttonLabel = selectedVideo.analysis_status === 'failed' ? '다시 분석 시작' : isAnalyzed(selectedVideo.analysis_status) ? '질문 가능' : '이 영상 분석 시작';
       container.innerHTML = `<div class="video-header"><span class="tag ${statusClass(selectedVideo.analysis_status)}">${esc(selectedVideo.analysis_status)}</span><p class="name">${esc(selectedVideo.title)}</p><a href="${esc(selectedVideo.url)}" target="_blank" rel="noreferrer">YouTube에서 열기</a>${progress}${error}<div class="controls"><button id="analyze-button" ${disabled ? 'disabled' : ''}>${buttonLabel}</button></div></div>`;
       const button = byId('analyze-button'); if (button) button.onclick = analyzeSelectedVideo;
+      updateChatTarget();
+    }
+    function updateChatTarget() {
+      const input = byId('chat-query'); const button = byId('chat-form').querySelector('button');
+      if (!selectedVideo) {
+        input.placeholder = '질문할 영상을 먼저 선택하세요';
+        input.disabled = true;
+        button.disabled = true;
+        return;
+      }
+      input.placeholder = '이 영상에 대해 질문하기';
+      input.disabled = false;
+      button.disabled = false;
     }
     function isMobilePlaybackContext() { return Boolean(navigator.userAgentData?.mobile) || /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent); }
     function playbackUrl(rawUrl) {
@@ -223,7 +236,7 @@
     }
     function renderLog(stickToBottom = true) {
       const container = byId('answer');
-      if (!chatTurns.length) { container.innerHTML = '<p class="empty">아직 대화 기록이 없습니다. 질문을 입력해 보세요.</p>'; return; }
+      if (!chatTurns.length) { container.innerHTML = `<p class="empty">${selectedVideo ? '이 영상의 대화 기록이 없습니다. 질문을 입력해 보세요.' : '질문할 영상을 먼저 선택하세요.'}</p>`; return; }
       container.innerHTML = chatTurns.map(turn => `<div class="msg ${turn.role}">${esc(turn.content)}</div>${turn.role === 'assistant' ? evidenceHtml(turn.evidence) : ''}`).join('');
       if (stickToBottom) container.scrollTop = container.scrollHeight;
     }
@@ -236,6 +249,7 @@
       try {
         const params = new URLSearchParams({limit: '20'});
         if (beforeId) params.set('before_id', beforeId);
+        if (selectedVideo) params.set('video_id', selectedVideo.id);
         const history = await chatApi(`/chat/history?${params.toString()}`);
         const messages = history.items || history.messages || [];
         const turns = messages.map(chatTurnFromMessage);
@@ -256,6 +270,7 @@
     byId('chat-form').onsubmit = async (event) => {
       event.preventDefault();
       const form = event.currentTarget; const button = form.querySelector('button');
+      if (!selectedVideo) { toast('질문할 영상을 먼저 선택하세요.'); return; }
       const query = byId('chat-query').value; if (!query.trim()) return;
       button.disabled = true; byId('chat-query').value = '';
       chatTurns.push({role:'user', content:query});
@@ -284,9 +299,11 @@
       evidenceMode = mode;
       byId('mode-simple').classList.toggle('active', mode === 'simple');
       byId('mode-precise').classList.toggle('active', mode === 'precise');
+      byId('mode-ultra').classList.toggle('active', mode === 'ultra');
     }
     byId('mode-simple').onclick = () => setEvidenceMode('simple');
     byId('mode-precise').onclick = () => setEvidenceMode('precise');
+    byId('mode-ultra').onclick = () => setEvidenceMode('ultra');
     async function loadWorkspace() { const workspace = await api('/auth/me'); byId('workspace-code').textContent = `작업공간 코드: ${workspace.workspace_code}`; }
     byId('connect-workspace').onclick = async () => { const code = window.prompt('기존 작업공간 코드를 입력하세요.'); if (!code) return; try { const workspace = await api('/auth/workspace', {method:'POST', body:JSON.stringify({workspace_code:code})}); closeAnalysisEvents(); selectedChannelId = null; selectedVideo = null; byId('workspace-code').textContent = `작업공간 코드: ${workspace.workspace_code}`; await loadChannels(); await loadChatHistory(); toast('기존 작업공간에 연결했습니다.'); } catch (error) { toast(error.message); } };
     byId('new-workspace').onclick = async () => { if (!window.confirm('새 작업공간으로 전환할까요? 현재 작업공간은 코드로 다시 연결할 수 있습니다.')) return; const workspace = await api('/auth/new-workspace', {method:'POST'}); closeAnalysisEvents(); selectedChannelId = null; selectedVideo = null; byId('workspace-code').textContent = `작업공간 코드: ${workspace.workspace_code}`; await loadChannels(); await loadChatHistory(); toast('새 작업공간을 만들었습니다.'); };

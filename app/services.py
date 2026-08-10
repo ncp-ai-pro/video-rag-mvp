@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from . import config
+from . import chat_cache, config
 from .db import connection, is_postgres
 
 
@@ -395,6 +395,19 @@ def analysis_event_state(video_id: int, user_id: int) -> Optional[Dict]:
     }
 
 
+def video_belongs_to_workspace(user_id: int, video_id: int) -> bool:
+    with connection() as conn:
+        row = conn.execute(
+            """
+            SELECT videos.id
+            FROM videos JOIN channels ON channels.id=videos.channel_id
+            WHERE videos.id=? AND channels.user_id=?
+            """,
+            (video_id, user_id),
+        ).fetchone()
+    return row is not None
+
+
 def upsert_video(channel_id: int, raw: Dict) -> int:
     video = {
         "platform_video_id": raw["platform_video_id"],
@@ -646,7 +659,8 @@ def find_metadata(user_id: int, query: str, limit: int) -> List[Dict]:
 
 
 def _split_evidence_sentences(text: str) -> List[str]:
-    sentences = [match.group(0).strip() for match in re.finditer(r"[^.!?。！？]+(?:[.!?。！？]+|$)", text)]
+    normalized = " ".join(str(text or "").split())
+    sentences = [match.group(0).strip() for match in re.finditer(r"[^.!?。！？]+(?:[.!?。！？]+|$)", normalized)]
     return [sentence for sentence in sentences if sentence]
 
 
@@ -673,12 +687,38 @@ def _token_overlap_highlight(query: str, text: str) -> Optional[Dict]:
     }
 
 
-def _decorate_evidence(evidence: List[Dict], query: str, evidence_mode: str) -> List[Dict]:
+def _semantic_similarity_highlight(query_vector: List[float], text: str) -> Optional[Dict]:
+    sentences = _split_evidence_sentences(text)
+    if not sentences:
+        return None
+    best_sentence = ""
+    best_score = -1.0
+    for sentence in sentences:
+        score = cosine(query_vector, embedding(sentence))
+        if score > best_score:
+            best_sentence = sentence
+            best_score = score
+    if not best_sentence or best_score <= 0:
+        return None
+    return {
+        "text": best_sentence,
+        "method": "sentence_embedding_similarity",
+        "score": round(best_score, 4),
+    }
+
+
+def _decorate_evidence(
+    evidence: List[Dict], query: str, evidence_mode: str, query_vector: Optional[List[float]] = None
+) -> List[Dict]:
     decorated = []
     for index, item in enumerate(evidence, start=1):
         enriched = {**item, "rank": index, "is_primary": index == 1}
         if evidence_mode == "precise":
             highlight = _token_overlap_highlight(query, item.get("quote") or item.get("context") or "")
+            if highlight:
+                enriched["highlight"] = highlight
+        elif evidence_mode == "ultra" and query_vector is not None:
+            highlight = _semantic_similarity_highlight(query_vector, item.get("quote") or item.get("context") or "")
             if highlight:
                 enriched["highlight"] = highlight
         decorated.append(enriched)
@@ -737,7 +777,7 @@ def find_evidence(
                 )
                 if len(evidence) >= limit:
                     break
-            return _decorate_evidence(evidence, query, evidence_mode)
+            return _decorate_evidence(evidence, query, evidence_mode, query_vector)
         rows = conn.execute(
             """
             SELECT chunks.id AS chunk_id, chunks.paragraph_id,
@@ -781,38 +821,61 @@ def find_evidence(
         deduped.append(item)
         if len(deduped) >= limit:
             break
-    return _decorate_evidence(deduped, query, evidence_mode)
+    return _decorate_evidence(deduped, query, evidence_mode, query_vector)
 
 
-def record_chat_message(user_id: int, role: str, content: str, evidence: Optional[List[Dict]] = None) -> None:
+def _chat_scope_condition(video_id: Optional[int]) -> str:
+    return "video_id IS NULL" if video_id is None else "video_id=?"
+
+
+def record_chat_message(
+    user_id: int, role: str, content: str, evidence: Optional[List[Dict]] = None, video_id: Optional[int] = None
+) -> None:
     """Appends a turn and prunes the workspace's history to the configured retention window."""
     keep = max(0, config.CHAT_HISTORY_TURNS) * 2
     evidence_json = json.dumps(evidence, ensure_ascii=False, separators=(",", ":")) if evidence else None
+    scope_condition = _chat_scope_condition(video_id)
+    scope_params = (video_id,) if video_id is not None else ()
     with connection() as conn:
         conn.execute(
-            "INSERT INTO chat_messages(user_id, role, content, evidence_json) VALUES (?, ?, ?, ?)",
-            (user_id, role, content, evidence_json),
+            "INSERT INTO chat_messages(user_id, video_id, role, content, evidence_json) VALUES (?, ?, ?, ?, ?)",
+            (user_id, video_id, role, content, evidence_json),
         )
         conn.execute(
-            """
+            f"""
             DELETE FROM chat_messages
-            WHERE user_id=? AND id NOT IN (
-                SELECT id FROM chat_messages WHERE user_id=? ORDER BY id DESC LIMIT ?
+            WHERE user_id=? AND {scope_condition} AND id NOT IN (
+                SELECT id FROM chat_messages WHERE user_id=? AND {scope_condition} ORDER BY id DESC LIMIT ?
             )
             """,
-            (user_id, user_id, keep),
+            (user_id, *scope_params, user_id, *scope_params, keep),
         )
+    message = {"role": role, "content": content}
+    if evidence:
+        message["evidence"] = evidence
+    chat_cache.append_recent(user_id, message, max_messages=keep)
 
 
-def recent_chat_history(user_id: int, *, include_evidence: bool = False) -> List[Dict]:
+def recent_chat_history(user_id: int, *, include_evidence: bool = False, video_id: Optional[int] = None) -> List[Dict]:
     """Returns this workspace's last CHAT_HISTORY_TURNS turns in chronological order."""
     limit = max(0, config.CHAT_HISTORY_TURNS) * 2
     if limit == 0:
         return []
+    scope_condition = _chat_scope_condition(video_id)
+    scope_params = (video_id,) if video_id is not None else ()
+    if not include_evidence:
+        cached = chat_cache.get_recent(user_id, include_evidence=False)
+        if cached is not None:
+            return cached
     with connection() as conn:
         rows = conn.execute(
-            "SELECT role, content, evidence_json FROM chat_messages WHERE user_id=? ORDER BY id DESC LIMIT ?",
-            (user_id, limit),
+            f"""
+            SELECT role, content, evidence_json
+            FROM chat_messages
+            WHERE user_id=? AND {scope_condition}
+            ORDER BY id DESC LIMIT ?
+            """,
+            (user_id, *scope_params, limit),
         ).fetchall()
     history = []
     for row in reversed(rows):
@@ -824,6 +887,8 @@ def recent_chat_history(user_id: int, *, include_evidence: bool = False) -> List
             except (TypeError, ValueError, json.JSONDecodeError):
                 item["evidence"] = []
         history.append(item)
+    if not include_evidence:
+        chat_cache.set_recent(user_id, [{"role": item["role"], "content": item["content"]} for item in history])
     return history
 
 
@@ -839,6 +904,7 @@ def _chat_message_item(row: Dict) -> Dict:
         evidence = []
     return {
         "id": row["id"],
+        "video_id": row["video_id"],
         "role": row["role"],
         "content": row["content"],
         "evidence": evidence,
@@ -846,15 +912,18 @@ def _chat_message_item(row: Dict) -> Dict:
     }
 
 
-def paged_chat_history(user_id: int, *, limit: int = 20, before_id: Optional[int] = None) -> Dict:
+def paged_chat_history(user_id: int, *, limit: int = 20, before_id: Optional[int] = None, video_id: Optional[int] = None) -> Dict:
     """Returns a cursor page for UI history; LLM context still uses recent_chat_history()."""
     page_size = min(max(limit, 1), 100)
+    scope_condition = _chat_scope_condition(video_id)
     query = """
-        SELECT id, role, content, evidence_json, created_at
+        SELECT id, video_id, role, content, evidence_json, created_at
         FROM chat_messages
-        WHERE user_id=?
+        WHERE user_id=? AND """ + scope_condition + """
     """
     params: List = [user_id]
+    if video_id is not None:
+        params.append(video_id)
     if before_id is not None:
         query += " AND id < ?"
         params.append(before_id)

@@ -36,7 +36,7 @@ class SearchRequest(BaseModel):
 class ChatRequest(SearchRequest):
     limit: int = Field(default=3, ge=1, le=3)
     video_id: Optional[int] = None
-    evidence_mode: Literal["simple", "precise"] = "simple"
+    evidence_mode: Literal["simple", "precise", "ultra"] = "simple"
 
 
 class WorkspaceConnect(BaseModel):

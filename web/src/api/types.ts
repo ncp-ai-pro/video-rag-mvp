@@ -91,10 +91,13 @@ export interface RecommendationResponse {
   notice: string;
 }
 
-/** evidence_mode="precise"일 때만 붙는, 질문과 겹치는 토큰이 가장 많은 문장. */
+/**
+ * evidence_mode가 "precise"(질문 토큰 겹침) 또는 "ultra"(문장 embedding 유사도)일 때만 붙는,
+ * 질문과 가장 관련 있는 문장.
+ */
 export interface EvidenceHighlight {
   text: string;
-  method: string;
+  method: "query_token_overlap" | "sentence_embedding_similarity";
   score: number;
 }
 
@@ -119,7 +122,7 @@ export interface Evidence {
   highlight?: EvidenceHighlight;
 }
 
-export type EvidenceMode = "simple" | "precise";
+export type EvidenceMode = "simple" | "precise" | "ultra";
 
 export interface ChatResponse {
   answer: string;
@@ -129,6 +132,8 @@ export interface ChatResponse {
 /** GET /chat/history 의 항목. assistant 메시지는 그때 쓰인 근거를 함께 저장해 돌려준다. */
 export interface ChatMessage {
   id: number;
+  /** 이 메시지가 속한 영상. 히스토리를 영상별로 저장·조회하는 데 쓰인다. */
+  video_id: number | null;
   role: "user" | "assistant";
   content: string;
   evidence: Evidence[];

@@ -55,12 +55,20 @@ export function useChat(
   videoId: number | null,
   onError: (message: string) => void,
 ) {
-  const history = useChatHistory(workspaceCode);
+  // 대화는 영상 단위로 저장·조회된다. videoId가 없으면 질문도, 기록 조회도 하지 않는다.
+  const history = useChatHistory(workspaceCode, videoId);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [query, setQuery] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [evidenceMode, setEvidenceMode] = useState<EvidenceMode>("simple");
   const abortRef = useRef<AbortController | null>(null);
+
+  // 영상이 바뀌면 진행 중이던 스트리밍을 끊는다. 미선택 상태면 대화도 비운다.
+  useEffect(() => {
+    abortRef.current?.abort();
+    setStreaming(false);
+    if (videoId === null) setTurns([]);
+  }, [videoId]);
 
   // 페이지들은 최신이 먼저 오므로 뒤집어서 오래된→최신 순으로 합친다.
   useEffect(() => {
@@ -77,7 +85,7 @@ export function useChat(
 
   const ask = async (question: string) => {
     const trimmed = question.trim();
-    if (!trimmed || streaming) return;
+    if (!trimmed || streaming || videoId === null) return;
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -129,6 +137,8 @@ export function useChat(
     setQuery,
     streaming,
     ask,
+    /** 영상을 선택해야 질문·기록 조회가 가능하다. */
+    canAsk: videoId !== null,
     evidenceMode,
     setEvidenceMode,
     historyHasMore: history.hasNextPage ?? false,

@@ -94,6 +94,7 @@ export default function WorkspacePage() {
         <ChatPanel
           workspaceCode={workspace?.workspace_code ?? null}
           videoId={selectedVideo?.id ?? null}
+          videoTitle={selectedVideo?.title ?? null}
           onSeek={handleSeek}
           onError={handleError}
         />

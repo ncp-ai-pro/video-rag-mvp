@@ -21,6 +21,7 @@ API 주소: `http://127.0.0.1:8000` · Chat 주소: `http://127.0.0.1:8001`
 | `POST` | `/recommendations` | 제목·설명 embedding 기반 영상 추천 | 200 |
 | `POST` | Chat Server `/chat` | 분석된 자막 검색 후 완료 답변과 시간 근거 반환 | 200 |
 | `POST` | Chat Server `/chat/stream` | 분석된 자막 검색 후 token SSE와 시간 근거 반환 | 200 |
+| `GET` | Chat Server `/chat/history` | 선택 영상 또는 일반 대화의 cursor 기반 채팅 기록 조회 | 200 |
 
 ## 핵심 요청 예시
 
@@ -31,7 +32,7 @@ POST /recommendations
 
 ```json
 POST /chat
-{ "query": "RAG 구축 순서를 설명해줘", "limit": 3 }
+{ "query": "RAG 구축 순서를 설명해줘", "video_id": 12, "limit": 3, "evidence_mode": "simple" }
 ```
 
 ```json
@@ -39,7 +40,15 @@ POST /auth/workspace
 { "workspace_code": "ABCD2345" }
 ```
 
-`/recommendations`의 결과는 `basis: "제목과 영상 설명의 embedding 유사도"`를 포함한다. `/chat`의 `evidence[]`는 각 `start_seconds`, `end_seconds`, `url`을 포함한다.
+`/recommendations`의 결과는 `basis: "제목과 영상 설명의 embedding 유사도"`를 포함한다. `/chat`의 `evidence[]`는 각 `start_seconds`, `end_seconds`, `url`을 포함한다. `video_id`를 보내면 Chat Server가 현재 작업공간 소유 영상인지 확인한 뒤 해당 영상의 자막과 대화 기록만 사용한다. 다른 작업공간의 `video_id`는 `404`를 반환한다.
+
+`evidence_mode`는 다음 값을 받는다.
+
+| 값 | 동작 |
+| --- | --- |
+| `simple` | 검색 score 1등 근거 카드만 `is_primary=true`로 표시 |
+| `precise` | token overlap으로 근거 quote 내부 핵심 문장을 `highlight.method=query_token_overlap`으로 표시 |
+| `ultra` | query와 quote 내부 문장 embedding similarity로 핵심 문장을 `highlight.method=sentence_embedding_similarity`로 표시 |
 
 ## 분석 상태 SSE
 
@@ -67,7 +76,7 @@ Worker는 FastAPI에 HTTP callback을 보내지 않는다. Worker가 `jobs`와 `
 
 ## Chat 응답 스트리밍
 
-`POST /chat`의 JSON 계약은 유지한다. 화면은 Chat Server의 `POST /chat/stream`을 `fetch()`로 호출하고 `text/event-stream` 응답을 읽는다. `EventSource`는 GET 전용이므로 이 endpoint에는 사용하지 않는다.
+`POST /chat`의 JSON 계약은 유지한다. 화면은 Chat Server의 `POST /chat/stream`을 `fetch()`로 호출하고 `text/event-stream` 응답을 읽는다. `EventSource`는 GET 전용이므로 이 endpoint에는 사용하지 않는다. `video_id`가 있으면 user/assistant 메시지는 `chat_messages.video_id`에 함께 저장되고, `GET /chat/history?video_id=12`는 해당 영상의 대화만 반환한다.
 
 ```text
 retry: 3000
