@@ -41,3 +41,8 @@ class ChatRequest(SearchRequest):
 
 class WorkspaceConnect(BaseModel):
     workspace_code: str = Field(min_length=6, max_length=16)
+
+# https://api.ncloud-docs.com/docs/ai-naver-clovavoice-ttspremium
+class TTSRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    speaker: str = Field(default="nyounghwa", max_length=50)

@@ -88,6 +88,40 @@
       const dispatch = (block) => { let event = 'message'; const data = []; for (const line of block.split('\n')) { if (line.startsWith('event:')) event = line.slice(6).trim(); if (line.startsWith('data:')) data.push(line.slice(5).trim()); } if (data.length) onEvent(event, JSON.parse(data.join('\n'))); };
       while (true) { const {done, value} = await reader.read(); buffer += decoder.decode(value || new Uint8Array(), {stream:!done}); let boundary; while ((boundary = buffer.indexOf('\n\n')) >= 0) { dispatch(buffer.slice(0, boundary)); buffer = buffer.slice(boundary + 2); } if (done) { if (buffer.trim()) dispatch(buffer); return; } }
     }
+    let currentAudio = null;
+    let currentTtsIndex = null;
+    let currentAudioUrl = null;
+
+    function stopAudio() {
+      if (!currentAudioUrl) return;
+      const url = currentAudioUrl;
+      currentAudioUrl = null;
+      currentAudio = null;
+      currentTtsIndex = null;
+      URL.revokeObjectURL(url);
+      renderLog();
+    }
+
+    let ttsLoading = false;
+    async function playAnswer(text, index) {
+      if (ttsLoading) return;
+      ttsLoading = true;
+      stopAudio();
+      try {
+        const response = await fetch(`${chatApiOrigin}/tts`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text })
+        });
+        if (!response.ok) throw new Error('음성 생성에 실패했습니다.');
+        currentAudioUrl = URL.createObjectURL(await response.blob());
+        currentTtsIndex = index;
+        renderLog();
+      } finally {
+        ttsLoading = false;
+      }
+    }
     const isAnalyzed = (status) => status === 'ready' || status === 'succeeded';
     const isAnalysisActive = (status) => status === 'queued' || status === 'running';
     const statusClass = (status) => isAnalyzed(status) ? 'ready' : status === 'failed' ? 'failed' : '';
@@ -149,6 +183,31 @@
         return target.toString();
       } catch (_) { return rawUrl; }
     }
+    function evidenceHtml(evidence = []) { return evidence.map(item => `<div class="evidence"><a href="${esc(playbackUrl(item.url))}" target="_blank" rel="noreferrer">${esc(item.title)} · ${Math.floor(item.start_seconds / 60)}:${String(Math.floor(item.start_seconds % 60)).padStart(2,'0')}–${Math.floor(item.end_seconds / 60)}:${String(Math.floor(item.end_seconds % 60)).padStart(2,'0')}</a><br><span class="meta">${esc(item.quote)}</span></div>`).join(''); }
+    function ttsButtonHtml(turn, index) {
+      if (!turn.content.trim()) return '';
+      if (currentTtsIndex === index && currentAudioUrl) {
+        return `<div class="controls"><audio controls autoplay src="${currentAudioUrl}" data-tts-player="${index}" style="width:100%"></audio></div>`;
+      }
+      return `<div class="controls"><button class="secondary" data-tts-index="${index}">🔊 답변 듣기</button></div>`;
+    }
+    function renderLog() {
+      const container = byId('answer');
+      if (!chatTurns.length) { container.innerHTML = '<p class="empty">아직 대화 기록이 없습니다. 질문을 입력해 보세요.</p>'; return; }
+      container.innerHTML = chatTurns.map((turn, index) => `<div class="msg ${turn.role}">${esc(turn.content)}</div>${turn.role === 'assistant' ? ttsButtonHtml(turn, index) + evidenceHtml(turn.evidence) : ''}`).join('');
+      container.querySelectorAll('[data-tts-index]').forEach(button => {
+        button.onclick = async () => {
+          const index = Number(button.dataset.ttsIndex);
+          button.disabled = true; button.textContent = '생성 중...';
+          try { await playAnswer(chatTurns[index].content, index); }
+          catch (error) { toast(error.message); button.disabled = false; button.textContent = '🔊 답변 듣기'; }
+        };
+      });
+      container.querySelectorAll('[data-tts-player]').forEach(player => {
+        player.playbackRate = 1.5;
+        player.onplay = () => { player.playbackRate = 1.5; currentAudio = player; };
+      });
+      container.scrollTop = container.scrollHeight;
     function highlightedQuote(item) {
       const quote = String(item.quote || '');
       const highlight = item.highlight && item.highlight.text ? String(item.highlight.text) : '';
