@@ -23,10 +23,11 @@
 | Worker | `app/worker.py` 단일 프로세스 | 동일 이미지의 Worker를 독립적으로 증설 |
 | 작업 큐 | SQLite `jobs` 테이블 | `DATABASE_URL`로 Cloud DB for PostgreSQL `jobs` 전환, Worker가 `FOR UPDATE SKIP LOCKED`로 선점 |
 | RAG 벡터 | SQLite JSON 문자열 | `DATABASE_URL` 모드의 PostgreSQL `vector` column + HNSW index |
+| 최근 채팅 맥락 | PostgreSQL `chat_messages` 직접 조회 | 선택적으로 Cloud DB for Redis에 최근 `CHAT_HISTORY_TURNS`만 캐시. 원본은 PostgreSQL 유지 |
 | 파일 | `data/downloads/` | private Object Storage에 VTT·M4A·STT 원본 JSON·정규화 JSON 저장, DB `analysis_artifacts`에는 immutable object key 저장 |
 | AI | mock 또는 CLOVA Studio | CLOVA Studio, 필요 시 CLOVA Speech |
 
-`DATABASE_URL`이 비어 있으면 `app/worker.py`의 `claim_job()`은 SQLite에서 단일 Worker가 작업을 가져오는 로컬 구현이다. Cloud DB for PostgreSQL URL을 주입하면 같은 코드가 `pgvector` 스키마를 만들고 Worker가 `FOR UPDATE SKIP LOCKED`로 작업을 선점한다. `POST /chat`은 `app/routers/chat.py`를 공유하지만 `app.chat_main:app`이라는 별도 ASGI 프로세스로 실행한다. Nginx와 Private ALB를 통한 단일 도메인 reverse proxy는 NCP 운영 목표이며, 현재 로컬 Compose의 직접 포트 호출과 구분한다. Worker에는 Object Storage와 CLOVA Speech adapter가 구현되어 있으며, 해당 비밀값은 Worker 런타임에만 주입한다.
+`DATABASE_URL`이 비어 있으면 `app/worker.py`의 `claim_job()`은 SQLite에서 단일 Worker가 작업을 가져오는 로컬 구현이다. Cloud DB for PostgreSQL URL을 주입하면 같은 코드가 `pgvector` 스키마를 만들고 Worker가 `FOR UPDATE SKIP LOCKED`로 작업을 선점한다. `POST /chat`은 `app/routers/chat.py`를 공유하지만 `app.chat_main:app`이라는 별도 ASGI 프로세스로 실행한다. Nginx와 Private ALB를 통한 단일 도메인 reverse proxy는 NCP 운영 목표이며, 현재 로컬 Compose의 직접 포트 호출과 구분한다. `REDIS_URL`이 있으면 Chat Server는 최근 대화 맥락 조회만 Redis에서 먼저 읽고, Redis가 비어 있거나 실패하면 PostgreSQL `chat_messages`를 읽는다. Worker에는 Object Storage와 CLOVA Speech adapter가 구현되어 있으며, 해당 비밀값은 Worker 런타임에만 주입한다.
 
 ## 전체 구조
 
@@ -328,11 +329,12 @@ NCP Cloud Data Streaming Service는 Kafka 클러스터를 관리형으로 제공
 
 1. VPC와 public/private subnet, ACG를 만든다.
 2. Cloud DB for PostgreSQL을 만들고 `pgvector` 확장 사용 권한을 부여한다. API·Chat·Worker에 같은 `DATABASE_URL`을 주입하면 앱 시작 시 운영용 `jobs`와 vector 스키마를 적용한다.
-3. Object Storage private bucket을 만들고 `raw/`, `captions/`, `audio/`, `stt/` prefix를 정한다.
-4. 같은 Docker image를 Container Registry에 push한다.
-5. private Web Server에는 Nginx와 정적 화면을, private API 서버에는 `uvicorn app.main:app`, private Chat Server에는 `uvicorn app.chat_main:app`, private Worker 서버에는 `python -m app.worker`를 실행한다.
-6. Public ALB에는 `web-tg`만, Private ALB에는 `api-tg`와 `chat-tg`만 등록한다. Worker는 어느 Target Group에도 등록하지 않는다.
-7. 분석 한 건이 `queued → running → succeeded` 또는 원인이 있는 `failed`로 끝나는지 확인한 뒤 Worker를 증설한다.
+3. 선택 사항으로 Cloud DB for Redis를 만들고 Chat Server에만 `REDIS_URL`을 주입한다. 이 Redis는 최근 LLM 대화 맥락 캐시이며, 채팅 원본 저장소나 작업 큐가 아니다.
+4. Object Storage private bucket을 만들고 `raw/`, `captions/`, `audio/`, `stt/` prefix를 정한다.
+5. 같은 Docker image를 Container Registry에 push한다.
+6. private Web Server에는 Nginx와 정적 화면을, private API 서버에는 `uvicorn app.main:app`, private Chat Server에는 `uvicorn app.chat_main:app`, private Worker 서버에는 `python -m app.worker`를 실행한다.
+7. Public ALB에는 `web-tg`만, Private ALB에는 `api-tg`와 `chat-tg`만 등록한다. Worker는 어느 Target Group에도 등록하지 않는다.
+8. 분석 한 건이 `queued → running → succeeded` 또는 원인이 있는 `failed`로 끝나는지 확인한 뒤 Worker를 증설한다.
 
 ## 관련 코드
 
