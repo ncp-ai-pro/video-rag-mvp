@@ -1,0 +1,42 @@
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location = /health {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+    }
+
+    # React SPA fallback. This keeps deep links such as /workspace working after
+    # refresh because the browser app, not Nginx, owns client-side routing.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Backend entrypoint. In production this points to the NKS internal Ingress
+    # or an internal ALB in front of api/chat services.
+    #
+    # Expected routing behind this upstream:
+    # - /api/chat* -> chat-service
+    # - /api/*     -> api-service
+    location /api/ {
+        proxy_pass ${BACKEND_INGRESS_ORIGIN}/api/;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Required for SSE endpoints such as /api/videos/{video_id}/events.
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+}
+

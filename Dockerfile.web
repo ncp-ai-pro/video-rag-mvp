@@ -1,0 +1,31 @@
+FROM node:22-slim AS builder
+
+WORKDIR /web
+
+COPY web/package*.json ./
+RUN npm ci
+
+COPY web ./
+
+# Production frontend is served from the public web origin.
+# API and Chat requests go through the same origin's /api reverse proxy.
+ARG VITE_API_BASE=/api
+ARG VITE_CHAT_BASE=/api
+ENV VITE_API_BASE=${VITE_API_BASE} \
+    VITE_CHAT_BASE=${VITE_CHAT_BASE}
+
+RUN npm run build
+
+
+FROM nginx:1.27-alpine
+
+# Nginx's official entrypoint runs envsubst for files under
+# /etc/nginx/templates/*.template, so the backend ingress origin can be injected
+# by NCP Init Script, Docker Compose, or Kubernetes later without rebuilding.
+ENV BACKEND_INGRESS_ORIGIN=http://127.0.0.1:65535
+
+COPY deploy/nginx/default.conf.template /etc/nginx/templates/default.conf.template
+COPY --from=builder /web/dist /usr/share/nginx/html
+
+EXPOSE 80
+

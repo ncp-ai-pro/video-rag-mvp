@@ -1,0 +1,56 @@
+name: CI Web
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "Dockerfile.web"
+      - "compose.web.yml"
+      - "deploy/nginx/**"
+      - ".github/workflows/ci-web.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "Dockerfile.web"
+      - "compose.web.yml"
+      - "deploy/nginx/**"
+      - ".github/workflows/ci-web.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: React web
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build React app
+        working-directory: web
+        run: npm run build
+
+      - name: Build web Docker image
+        run: |
+          docker build \
+            -f Dockerfile.web \
+            --build-arg VITE_API_BASE=/api \
+            --build-arg VITE_CHAT_BASE=/api \
+            -t yt-rag-web:ci \
+            .

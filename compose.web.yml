@@ -1,0 +1,32 @@
+name: video-rag-web
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        VITE_API_BASE: /api
+        VITE_CHAT_BASE: /api
+    image: video-rag-web:latest
+    environment:
+      # For the first frontend-only smoke test, this can stay as a blackhole.
+      # Once NKS backend ingress is ready, set it to the internal ingress origin:
+      # BACKEND_INGRESS_ORIGIN=http://<nks-internal-ingress-dns-or-ip>
+      BACKEND_INGRESS_ORIGIN: ${BACKEND_INGRESS_ORIGIN:-http://127.0.0.1:65535}
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-qO-",
+          "http://127.0.0.1/health",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
