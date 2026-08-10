@@ -1,4 +1,4 @@
-import type { AnalysisStage, AnalysisStatus } from './types'
+import type { AnalysisStage, AnalysisStatus } from '@/api/types'
 
 // userAgentData는 아직 TS DOM lib에 없다. 모바일 판별에만 쓴다.
 declare global {

@@ -208,6 +208,7 @@
         player.onplay = () => { player.playbackRate = 1.5; currentAudio = player; };
       });
       container.scrollTop = container.scrollHeight;
+    }
     function highlightedQuote(item) {
       const quote = String(item.quote || '');
       const highlight = item.highlight && item.highlight.text ? String(item.highlight.text) : '';

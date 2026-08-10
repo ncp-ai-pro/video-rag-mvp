@@ -2,7 +2,7 @@ import { Check, Loader2 } from 'lucide-react'
 
 import { PROGRESS_STEPS, stageProgress, stepState } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { Video } from '@/lib/types'
+import type { Video } from '@/api/types'
 
 /** 분석 진행 중 화면. 백엔드 SSE stage를 목업의 스텝 UI로 보여준다. */
 export function AnalysisProgress({ video }: { video: Video }) {
