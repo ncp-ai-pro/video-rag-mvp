@@ -4,7 +4,7 @@ import re
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from ..config import CLOVA_VOICE_CLIENT_ID, CLOVA_VOICE_CLIENT_SECRET
+from ..config import CLOVA_VOICE_CLIENT_ID, CLOVA_VOICE_CLIENT_SECRET, CLOVA_VOICE_URL
 from ..schemas import TTSRequest
 
 
@@ -30,7 +30,6 @@ def clean_for_tts(text: str) -> str:
     text = re.sub(r"(?m)^\s*(\d+)\.\s+", r"\1번, ", text)
     return re.sub(r"\s+", " ", text).strip()
 
-CLOVA_VOICE_URL = "https://naveropenapi.apigw.ntruss.com/tts-premium/v1/tts"
 
 @router.post("/tts")
 async def create_speech(payload: TTSRequest):
