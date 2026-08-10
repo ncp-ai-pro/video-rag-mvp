@@ -10,8 +10,9 @@
 - `POST /recommendations`: 모든 영상의 제목·설명 embedding으로 메타데이터 추천을 반환한다.
 - `POST /videos/{id}/analyze`: 선택한 영상만 자막 수집 작업을 큐에 등록한다.
 - `POST /videos/{id}/transcript`: 로컬 테스트용 시간 구간 자막을 넣는다.
-- Chat Server `POST /chat`: 분석 완료된 자막 chunk만 검색하고, 답변과 최대 3개의 실제 재생 시간 링크를 반환한다.
+- Chat Server `POST /chat`: 분석 완료된 자막 chunk만 검색하고, 답변과 최대 3개의 실제 재생 시간 링크를 반환한다. `evidence_mode=ultra`는 근거 내부 문장 embedding similarity로 핵심 문장을 고른다.
 - Chat Server `POST /chat/stream`: 같은 근거를 먼저 보내고, Chat 답변 token을 SSE로 중계한다. 기존 `/chat` JSON 응답은 유지한다.
+- Chat은 영상별 최근 `CHAT_HISTORY_TURNS`(기본 3턴) 질문·답변을 `chat_messages` 테이블에 저장했다가 다음 CLOVA 요청의 대화 맥락으로 함께 보낸다. 오래된 턴은 같은 영상 스코프 안에서 저장 시점에 바로 정리된다.
 - Chat은 워크스페이스별 최근 `CHAT_HISTORY_TURNS`(기본 3턴) 질문·답변을 `chat_messages` 테이블에 저장했다가 다음 CLOVA 요청의 대화 맥락으로 함께 보낸다. 오래된 턴은 저장 시점에 바로 정리된다.
 - `REDIS_URL`을 설정하면 Chat Server가 최근 대화 맥락만 Redis에 캐시한다. PostgreSQL `chat_messages`가 원본이며 Redis 장애나 미설정 상태에서는 PostgreSQL 조회로 동작한다.
 

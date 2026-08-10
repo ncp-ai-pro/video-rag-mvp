@@ -65,6 +65,7 @@ export function WorkspacePage({
         <ChatPanel
           workspaceCode={workspaceCode}
           videoId={selectedVideo?.id ?? null}
+          videoTitle={selectedVideo?.title ?? null}
           onSeek={onSeek}
           onError={onError}
         />

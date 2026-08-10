@@ -6,9 +6,10 @@ import type { ChatHistoryPage, ChatResponse, Evidence, EvidenceMode } from "./ty
  * 작업공간의 저장된 대화 기록을 불러온다. Chat 서버가 세션 쿠키로 작업공간을 식별한다.
  * assistant 메시지는 저장된 근거(evidence)를 함께 포함할 수 있다.
  */
-export async function fetchChatHistory(options: { limit?: number; beforeId?: number | null } = {}): Promise<ChatHistoryPage> {
+export async function fetchChatHistory(options: { limit?: number; beforeId?: number | null; videoId?: number | null } = {}): Promise<ChatHistoryPage> {
   const params = new URLSearchParams({ limit: String(options.limit ?? 20) });
   if (options.beforeId) params.set("before_id", String(options.beforeId));
+  if (options.videoId) params.set("video_id", String(options.videoId));
   const response = await fetch(`${CHAT_BASE}/chat/history?${params.toString()}`, {
     credentials: CHAT_CREDENTIALS,
     headers: { "Content-Type": "application/json" },
@@ -140,12 +141,12 @@ export async function streamChat(
 }
 
 /** 스트리밍이 필요 없는 경우의 완료형 호출. */
-export async function askChat(query: string, limit = 3, evidenceMode: EvidenceMode = "simple"): Promise<ChatResponse> {
+export async function askChat(query: string, limit = 3, evidenceMode: EvidenceMode = "simple", videoId: number | null = null): Promise<ChatResponse> {
   const response = await fetch(`${CHAT_BASE}/chat`, {
     method: "POST",
     credentials: CHAT_CREDENTIALS,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, limit, evidence_mode: evidenceMode }),
+    body: JSON.stringify({ query, limit, video_id: videoId, evidence_mode: evidenceMode }),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);

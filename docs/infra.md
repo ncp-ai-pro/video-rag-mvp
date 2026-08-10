@@ -155,9 +155,10 @@ flowchart LR
 ~~~
 
 1. 브라우저가 단일 서비스 도메인의 `POST /chat`으로 질문을 보낸다. Public ALB는 Web Server로 보내고, Nginx가 `Host: chat.internal`을 설정해 Private ALB의 Chat Target Group으로 전달한다.
-2. Chat Server가 CLOVA Studio Embedding으로 질문 vector를 만들고, 현재 작업공간의 분석 완료 자막 구간만 `pgvector`에서 Top-K 검색한다.
-3. Chat Server가 검색 결과의 **원문 자막과 시간**을 프롬프트 근거로 구성해 CLOVA Studio Chat에 전달한다. vector 숫자 자체를 Chat 모델에 보내는 것은 아니다.
-4. Chat 모델이 자연어 답변을 만들고, Chat Server가 `/chat`에서는 완료 응답과 근거 링크를, `/chat/stream`에서는 `evidence → token* → done` SSE로 반환한다.
+2. Chat Server가 요청의 `video_id`가 현재 작업공간 소유인지 확인한다. `video_id`가 있으면 해당 영상의 대화 기록과 자막만 사용하고, 없으면 일반 대화 스코프로 처리한다.
+3. Chat Server가 CLOVA Studio Embedding으로 질문 vector를 만들고, 현재 작업공간의 분석 완료 자막 구간만 `pgvector`에서 Top-K 검색한다. `evidence_mode=ultra`에서는 근거 내부 문장 embedding similarity를 한 번 더 계산해 핵심 문장을 고른다.
+4. Chat Server가 검색 결과의 **원문 자막과 시간**을 프롬프트 근거로 구성해 CLOVA Studio Chat에 전달한다. vector 숫자 자체를 Chat 모델에 보내는 것은 아니다.
+5. Chat 모델이 자연어 답변을 만들고, Chat Server가 `/chat`에서는 완료 응답과 근거 링크를, `/chat/stream`에서는 `evidence → token* → done` SSE로 반환한다. user/assistant 메시지는 `chat_messages.video_id`에 저장되어 영상별 히스토리로 분리된다.
 
 이 흐름은 Worker를 거치지 않으며, CLOVA Speech도 사용하지 않는다. CLOVA Speech는 선택 영상에 자막이 없을 때 음성을 텍스트로 바꾸는 STT 서비스일 뿐 챗봇이 아니다. Chat Server는 `app.chat_main:app`으로 독립 실행하며, `app/routers/chat.py` router를 공유한다. Nginx는 채팅 스트림에서 응답 버퍼링을 끄고 idle timeout보다 짧은 heartbeat를 그대로 전달해야 한다.
 

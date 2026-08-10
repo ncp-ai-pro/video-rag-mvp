@@ -114,6 +114,51 @@ def test_paragraph_context_groups_multiple_rag_chunks():
         assert evidence[0]["paragraph_id"] is not None
         assert evidence[0]["quote"] != evidence[0]["context"]
         assert "답변 컨텍스트" in evidence[0]["context"]
+
+
+def test_ultra_evidence_mode_uses_sentence_embedding_similarity():
+    with tempfile.TemporaryDirectory() as directory:
+        os.environ["DATABASE_PATH"] = os.path.join(directory, "ultra.db")
+        os.environ["EMBEDDING_PROVIDER"] = "mock"
+        os.environ["CHAT_PROVIDER"] = "mock"
+
+        from app import config, db, services, workspaces
+
+        importlib.reload(config)
+        importlib.reload(db)
+        importlib.reload(services)
+        importlib.reload(workspaces)
+        db.initialize()
+        workspace = workspaces.create_guest_workspace()
+        with db.connection() as conn:
+            channel_id = conn.execute(
+                "INSERT INTO channels(user_id, url, name) VALUES (?, ?, ?) RETURNING id",
+                (workspace["id"], "https://www.youtube.com/@ultra", "ultra"),
+            ).fetchone()["id"]
+        video_id = services.upsert_video(
+            channel_id,
+            {
+                "platform_video_id": "ultra123",
+                "title": "울트라 근거 테스트",
+                "description": "문장 embedding으로 근거를 고릅니다.",
+                "url": "https://www.youtube.com/watch?v=ultra123",
+            },
+        )
+        services.import_transcript(
+            video_id,
+            [
+                {
+                    "start_seconds": 1,
+                    "end_seconds": 20,
+                    "text": "잡담입니다. RAG 구축은 자막을 청크로 나누고 embedding을 저장하는 순서입니다.",
+                }
+            ],
+        )
+
+        evidence = services.find_evidence(workspace["id"], "RAG 구축 embedding 순서", 3, video_id, "ultra")
+
+        assert evidence[0]["highlight"]["method"] == "sentence_embedding_similarity"
+        assert "RAG 구축" in evidence[0]["highlight"]["text"]
 def test_collect_channel_metadata_accepts_single_video_url(monkeypatch):
     from app import services
 
@@ -387,23 +432,29 @@ def test_chat_router_keeps_post_contract_and_workspace_scope():
             assert transcript.status_code == 204
 
             owner_chat.cookies.set("video_rag_session", owner.cookies.get("video_rag_session"))
-            response = owner_chat.post("/chat", json={"query": "자막 근거"})
+            response = owner_chat.post("/chat", json={"query": "자막 근거", "video_id": video["video_id"]})
             assert response.status_code == 200
             assert set(response.json()) == {"answer", "evidence"}
             assert response.json()["evidence"][0]["video_id"] == video["video_id"]
             assert response.json()["evidence"][0]["rank"] == 1
             assert response.json()["evidence"][0]["is_primary"] is True
             assert "highlight" not in response.json()["evidence"][0]
-            history = owner_chat.get("/chat/history")
+            global_history = owner_chat.get("/chat/history")
+            assert global_history.status_code == 200
+            assert global_history.json()["messages"] == []
+            history = owner_chat.get(f"/chat/history?video_id={video['video_id']}")
             assert history.status_code == 200
             messages = history.json()["messages"]
             assert [message["role"] for message in messages] == ["user", "assistant"]
+            assert [message["video_id"] for message in messages] == [video["video_id"], video["video_id"]]
             assert messages[0]["content"] == "자막 근거"
             assert messages[1]["evidence"][0]["video_id"] == video["video_id"]
             assert messages[1]["evidence"][0]["is_primary"] is True
 
             with owner_chat.stream(
-                "POST", "/chat/stream", json={"query": "자막 근거", "evidence_mode": "precise"}
+                "POST",
+                "/chat/stream",
+                json={"query": "자막 근거", "video_id": video["video_id"], "evidence_mode": "precise"},
             ) as response:
                 assert response.status_code == 200
                 assert response.headers["content-type"].startswith("text/event-stream")
@@ -415,18 +466,21 @@ def test_chat_router_keeps_post_contract_and_workspace_scope():
             assert '"text":"로컬 "' in streamed
             assert '"text":"테스트 "' in streamed
             assert '"method":"query_token_overlap"' in streamed
-            history = owner_chat.get("/chat/history")
+            history = owner_chat.get(f"/chat/history?video_id={video['video_id']}")
             assert history.status_code == 200
             messages = history.json()["messages"]
             assert [message["role"] for message in messages] == ["user", "assistant", "user", "assistant"]
+            assert {message["video_id"] for message in messages} == {video["video_id"]}
             assert messages[-1]["evidence"][0]["video_id"] == video["video_id"]
             assert messages[-1]["evidence"][0]["highlight"]["text"] == "채팅은 검색한 자막 근거로 답변합니다."
-            latest_page = owner_chat.get("/chat/history?limit=2")
+            latest_page = owner_chat.get(f"/chat/history?limit=2&video_id={video['video_id']}")
             assert latest_page.status_code == 200
             latest_body = latest_page.json()
             assert [message["role"] for message in latest_body["items"]] == ["user", "assistant"]
             assert latest_body["has_more"] is True
-            previous_page = owner_chat.get(f"/chat/history?limit=2&before_id={latest_body['next_cursor']}")
+            previous_page = owner_chat.get(
+                f"/chat/history?limit=2&video_id={video['video_id']}&before_id={latest_body['next_cursor']}"
+            )
             assert previous_page.status_code == 200
             previous_body = previous_page.json()
             assert [message["role"] for message in previous_body["items"]] == ["user", "assistant"]
@@ -434,6 +488,10 @@ def test_chat_router_keeps_post_contract_and_workspace_scope():
 
         with TestClient(main.app) as other_workspace, TestClient(chat_main.app) as other_workspace_chat:
             assert other_workspace.get(f"/videos/{video['video_id']}").status_code == 404
+            assert other_workspace_chat.post(
+                "/chat", json={"query": "자막 근거", "video_id": video["video_id"]}
+            ).status_code == 404
+            assert other_workspace_chat.get(f"/chat/history?video_id={video['video_id']}").status_code == 404
             response = other_workspace_chat.post("/chat", json={"query": "자막 근거"})
             assert response.status_code == 200
             assert response.json()["evidence"] == []
