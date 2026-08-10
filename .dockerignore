@@ -9,3 +9,5 @@ __pycache__
 data
 docs
 tests
+web/node_modules
+web/dist

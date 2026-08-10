@@ -5,6 +5,7 @@ import time
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import CHAT_PUBLIC_ORIGIN
 from .db import connection, is_postgres, is_unique_violation
@@ -26,6 +27,9 @@ app = create_web_app(title="Video RAG API", version="0.2.0")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 SSE_POLL_INTERVAL_SECONDS = 1
 SSE_HEARTBEAT_SECONDS = 20
+
+if (STATIC_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="react-assets")
 
 
 def required_channel(channel_id: int, user_id: int):
@@ -60,6 +64,14 @@ def health():
 @app.get("/", include_in_schema=False)
 def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+def favicon():
+    path = STATIC_DIR / "favicon.svg"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="favicon not found")
+    return FileResponse(path)
 
 
 @app.get("/runtime-config.js", include_in_schema=False)
