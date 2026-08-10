@@ -8,7 +8,7 @@ import { formatTimestamp, playbackUrl, youtubeIdFromUrl } from '@/lib/format'
 import type { ChatMessage, Evidence, EvidenceMode } from '@/lib/types'
 
 /**
- * 한 번의 질문·답변·근거. 대화는 백엔드(GET /chat/history)에 작업공간별로 저장된다.
+ * 한 번의 질문·답변·근거. 대화는 백엔드(GET /chat/history)에 영상별로 저장된다.
  * assistant 메시지에는 저장된 근거(evidence)가 함께 돌아오므로, 새로고침 후에도 다시 렌더링할 수 있다.
  */
 interface ChatTurn {
@@ -45,14 +45,16 @@ function messagesToTurns(messages: ChatMessage[]): ChatTurn[] {
 interface Props {
   /** 작업공간이 바뀌면 그 작업공간의 대화 기록을 다시 불러온다. */
   workspaceCode: string | null
-  /** 선택된 영상 ID. 있으면 그 영상으로 근거를 좁혀 질문한다. */
+  /** 선택된 영상 ID. 있으면 그 영상으로 근거와 대화 기록을 좁힌다. */
   videoId: number | null
+  /** 선택된 영상 제목. 대화 대상 표시용이다. */
+  videoTitle?: string | null
   /** 근거 클릭 시 플레이어를 해당 영상·시점으로 이동시킨다. */
   onSeek: (youtubeId: string, seconds: number) => void
   onError: (message: string) => void
 }
 
-export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
+export function ChatPanel({ workspaceCode, videoId, videoTitle, onSeek, onError }: Props) {
   const [turns, setTurns] = useState<ChatTurn[]>([])
   const [query, setQuery] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -72,7 +74,7 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
       setHistoryLoading(true)
       if (prepend) preserveScrollHeightRef.current = scrollRef.current?.scrollHeight ?? null
       try {
-        const page = await fetchChatHistory({ limit: 20, beforeId })
+        const page = await fetchChatHistory({ limit: 20, beforeId, videoId })
         const pageTurns = messagesToTurns(page.items)
         setHistoryCursor(page.next_cursor)
         setHistoryHasMore(page.has_more)
@@ -84,12 +86,14 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
         setHistoryLoading(false)
       }
     },
-    [workspaceCode],
+    [videoId, workspaceCode],
   )
 
-  // 작업공간 기준으로 저장된 대화 기록을 불러온다.
+  // 선택한 영상 기준으로 저장된 대화 기록을 불러온다.
   useEffect(() => {
-    if (!workspaceCode) {
+    abortRef.current?.abort()
+    setStreaming(false)
+    if (!workspaceCode || !videoId) {
       setTurns([])
       setHistoryCursor(null)
       setHistoryHasMore(false)
@@ -99,7 +103,7 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
     setHistoryCursor(null)
     setHistoryHasMore(false)
     loadHistoryPage()
-  }, [loadHistoryPage, workspaceCode])
+  }, [loadHistoryPage, videoId, workspaceCode])
 
   // 새 내용이 생기면 맨 아래로 스크롤한다.
   useLayoutEffect(() => {
@@ -123,7 +127,7 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
   const ask = async (event: React.FormEvent) => {
     event.preventDefault()
     const question = query.trim()
-    if (!question || streaming) return
+    if (!question || streaming || !videoId) return
 
     abortRef.current?.abort()
     const controller = new AbortController()
@@ -194,7 +198,9 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border/60 px-4 py-2.5">
         <span className="text-sm font-medium">대화</span>
-        <span className="text-xs text-muted-foreground">작업공간에 저장됨</span>
+        <span className="max-w-[66%] truncate text-xs text-muted-foreground">
+          {videoTitle ? `질문 대상: ${videoTitle}` : '영상을 선택하세요'}
+        </span>
       </div>
 
       {/* 대화 (백엔드 저장) */}
@@ -215,7 +221,9 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
 
         {turns.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            분석이 끝난 자막에서 근거를 찾아 답합니다. 아래에 질문을 입력하세요.
+            {videoId
+              ? '이 영상에서 분석된 자막 근거를 찾아 답합니다. 아래에 질문을 입력하세요.'
+              : '왼쪽 목록에서 질문할 영상을 먼저 선택하세요.'}
           </p>
         )}
 
@@ -316,16 +324,26 @@ export function ChatPanel({ workspaceCode, videoId, onSeek, onError }: Props) {
             >
               문장 강조
             </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className={`rounded-none px-3 ${evidenceMode === 'ultra' ? 'bg-foreground text-background hover:bg-foreground/90 hover:text-background' : 'text-muted-foreground'}`}
+              onClick={() => setEvidenceMode('ultra')}
+            >
+              의미 강조
+            </Button>
           </div>
         </div>
         <form onSubmit={ask} className="flex gap-2">
           <Input
             value={query}
-            placeholder="영상에 대해 질문하기"
+            placeholder={videoId ? '영상에 대해 질문하기' : '질문할 영상을 먼저 선택하세요'}
             aria-label="RAG 질문"
+            disabled={!videoId}
             onChange={(event) => setQuery(event.target.value)}
           />
-          <Button type="submit" disabled={streaming || !query.trim()}>
+          <Button type="submit" disabled={streaming || !videoId || !query.trim()}>
             {streaming ? '생성 중…' : '질문'}
           </Button>
         </form>

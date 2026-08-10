@@ -92,11 +92,11 @@ export interface RecommendationResponse {
 }
 
 /** url에는 이미 ?t={start}s 가 붙어 있다. */
-export type EvidenceMode = 'simple' | 'precise'
+export type EvidenceMode = 'simple' | 'precise' | 'ultra'
 
 export interface EvidenceHighlight {
   text: string
-  method: 'query_token_overlap'
+  method: 'query_token_overlap' | 'sentence_embedding_similarity'
   score: number
 }
 
@@ -124,6 +124,7 @@ export interface ChatResponse {
 /** GET /chat/history 의 항목. assistant 메시지는 저장된 근거 구간을 함께 돌려줄 수 있다. */
 export interface ChatMessage {
   id: number
+  video_id: number | null
   role: 'user' | 'assistant'
   content: string
   evidence?: Evidence[]
