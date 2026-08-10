@@ -1,30 +1,27 @@
-import { CHAT_BASE, CHAT_CREDENTIALS } from "./config";
-import { ApiError } from "./api";
+import { ApiError } from "./client";
+import { CHAT_BASE, CHAT_CREDENTIALS } from "@/lib/config";
 import type { ChatHistoryPage, ChatResponse, Evidence, EvidenceMode } from "./types";
 
 /**
- * 작업공간의 저장된 대화 기록을 불러온다. Chat 서버가 세션 쿠키로 작업공간을 식별한다.
- * assistant 메시지는 저장된 근거(evidence)를 함께 포함할 수 있다.
+ * 작업공간의 저장된 대화 기록을 최신순 커서로 페이지네이션해서 불러온다.
+ * videoId를 주면 그 영상의 대화만 좁혀서 가져온다(히스토리도 영상 단위로 저장된다).
+ * Chat 서버가 세션 쿠키로 작업공간을 식별한다. assistant 메시지는 그때 근거도 함께 저장돼 있다.
  */
-export async function fetchChatHistory(options: { limit?: number; beforeId?: number | null; videoId?: number | null } = {}): Promise<ChatHistoryPage> {
+export async function fetchChatHistory(
+  options: { limit?: number; beforeId?: number | null; videoId?: number | null } = {},
+): Promise<ChatHistoryPage> {
   const params = new URLSearchParams({ limit: String(options.limit ?? 20) });
-  if (options.beforeId) params.set("before_id", String(options.beforeId));
-  if (options.videoId) params.set("video_id", String(options.videoId));
-  const response = await fetch(`${CHAT_BASE}/chat/history?${params.toString()}`, {
+  if (options.beforeId != null) params.set("before_id", String(options.beforeId));
+  if (options.videoId != null) params.set("video_id", String(options.videoId));
+
+  const response = await fetch(`${CHAT_BASE}/chat/history?${params}`, {
     credentials: CHAT_CREDENTIALS,
     headers: { "Content-Type": "application/json" },
   });
   if (!response.ok) {
     throw new ApiError("대화 기록을 불러오지 못했습니다.", response.status);
   }
-  const body = (await response.json()) as Partial<ChatHistoryPage>;
-  const items = body.items ?? body.messages ?? [];
-  return {
-    items,
-    messages: items,
-    has_more: Boolean(body.has_more),
-    next_cursor: body.next_cursor ?? null,
-  };
+  return (await response.json()) as ChatHistoryPage;
 }
 
 /**
@@ -80,12 +77,20 @@ function toStreamEvent(event: string, raw: string): ChatStreamEvent | null {
   }
 }
 
+/**
+ * video_id를 보내면 백엔드가 그 영상으로 근거를 좁힌다. null이면 작업공간 전체.
+ * evidenceMode="precise"|"ultra"면 각 근거에 질문과 겹치는 문장(highlight)이 함께 붙어 온다.
+ */
 export async function streamChat(
   query: string,
   onEvent: (event: ChatStreamEvent) => void,
-  options: { evidenceMode?: EvidenceMode; limit?: number; signal?: AbortSignal; videoId?: number | null } = {},
+  options: {
+    limit?: number;
+    signal?: AbortSignal;
+    videoId?: number | null;
+    evidenceMode?: EvidenceMode;
+  } = {},
 ): Promise<void> {
-  // video_id를 보내면 백엔드가 그 영상으로 근거를 좁힌다. null이면 작업공간 전체.
   const response = await fetch(`${CHAT_BASE}/chat/stream`, {
     method: "POST",
     credentials: CHAT_CREDENTIALS,
@@ -105,9 +110,7 @@ export async function streamChat(
   if (!response.ok || !response.body) {
     const body = await response.json().catch(() => null);
     throw new ApiError(
-      typeof body?.detail === "string"
-        ? body.detail
-        : "질문 요청에 실패했습니다.",
+      typeof body?.detail === "string" ? body.detail : "질문 요청에 실패했습니다.",
       response.status,
     );
   }
@@ -140,20 +143,26 @@ export async function streamChat(
   }
 }
 
-/** 스트리밍이 필요 없는 경우의 완료형 호출. */
-export async function askChat(query: string, limit = 3, evidenceMode: EvidenceMode = "simple", videoId: number | null = null): Promise<ChatResponse> {
+/** 스트리밍이 필요 없는 완료형 호출. */
+export async function askChat(
+  query: string,
+  options: { limit?: number; evidenceMode?: EvidenceMode; videoId?: number | null } = {},
+): Promise<ChatResponse> {
   const response = await fetch(`${CHAT_BASE}/chat`, {
     method: "POST",
     credentials: CHAT_CREDENTIALS,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, limit, video_id: videoId, evidence_mode: evidenceMode }),
+    body: JSON.stringify({
+      query,
+      limit: options.limit ?? 3,
+      video_id: options.videoId ?? null,
+      evidence_mode: options.evidenceMode ?? "simple",
+    }),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new ApiError(
-      typeof body?.detail === "string"
-        ? body.detail
-        : "질문 요청에 실패했습니다.",
+      typeof body?.detail === "string" ? body.detail : "질문 요청에 실패했습니다.",
       response.status,
     );
   }
