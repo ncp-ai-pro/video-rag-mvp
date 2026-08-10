@@ -66,6 +66,11 @@ def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/workspace", include_in_schema=False)
+def workspace_index():
+    return FileResponse(STATIC_DIR / "index.html")
+
+
 @app.get("/favicon.svg", include_in_schema=False)
 def favicon():
     path = STATIC_DIR / "favicon.svg"
