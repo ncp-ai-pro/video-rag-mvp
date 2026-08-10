@@ -18,8 +18,9 @@
     .empty { color:var(--muted); padding:20px 16px; font-size:13px; } .controls { display:flex; gap:8px; margin-top:10px; } .block { margin-bottom:20px; }
     .tag { display:inline-block; border-radius:999px; padding:2px 7px; font-size:11px; font-weight:650; background:#eef1f5; color:#556070; } .tag.ready { background:#e9f7ef; color:#19703b; } .tag.failed { background:#fff0ef; color:var(--danger); }
     .video-header { padding:16px; border-bottom:1px solid var(--line); } .video-header a { color:var(--accent); text-decoration:none; font-size:13px; } .analysis-note { font-size:13px; color:var(--muted); margin:10px 0; }
-    .result { display:block; text-decoration:none; } .score { float:right; color:var(--muted); font-size:12px; } .evidence { border-left:3px solid var(--accent); padding:10px 12px; margin-top:10px; background:#f8fbff; } .evidence a { color:var(--accent); font-weight:650; text-decoration:none; }
+    .result { display:block; text-decoration:none; } .score { float:right; color:var(--muted); font-size:12px; } .evidence-list { margin-top:8px; } .evidence-title { margin:0 0 6px; color:var(--muted); font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; } .evidence { display:block; border:1px solid var(--line); border-radius:12px; padding:9px 11px; margin-top:7px; background:#fff; text-decoration:none; color:var(--ink); transition:background .15s,border-color .15s; } .evidence:hover { background:#f8fafc; border-color:#c9d1de; } .evidence.primary { box-shadow:inset 2px 0 0 rgba(23,32,51,.32); } .evidence-head { display:flex; align-items:center; gap:6px; min-width:0; } .evidence-time { display:inline-flex; align-items:center; border-radius:999px; padding:1px 7px; background:#eef1f5; color:#556070; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; } .evidence .badge { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:1px 6px; color:#4b5563; font-size:10px; font-weight:650; } .evidence-source { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font-size:12px; } .evidence-quote { display:block; margin-top:6px; color:#4a5568; font-size:12px; line-height:1.55; } .highlight { font-weight:700; color:var(--ink); background:linear-gradient(transparent 58%, #fff0b3 0); }
     .chat-log { max-height:440px; overflow-y:auto; } .msg { padding:9px 12px; border-radius:10px; margin-bottom:10px; white-space:pre-wrap; } .msg.user { background:var(--soft); margin-left:28px; } .msg.assistant { background:#f3f5f8; margin-right:28px; }
+    .segmented { display:inline-flex; border:1px solid var(--line); border-radius:999px; overflow:hidden; background:#fff; } .segmented button { border-radius:0; background:#fff; color:var(--muted); padding:5px 10px; font-size:12px; font-weight:600; } .segmented button.active { background:var(--ink); color:#fff; }
     #toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:#172033; color:#fff; padding:10px 14px; border-radius:7px; font-size:13px; display:none; max-width:90vw; }
     @media (max-width: 980px) { main { grid-template-columns:230px 1fr; } #chat-panel { grid-column:1 / -1; } }
     @media (max-width: 650px) { header { padding:0 16px; } main { display:block; padding:12px; } section { margin-bottom:12px; } }
@@ -55,6 +56,7 @@
         <div class="block">
           <label for="chat-query" class="name">RAG 질문</label>
           <p class="analysis-note">분석 완료된 자막에서 근거 구간을 최대 3개 반환합니다. 최근 3턴의 대화 맥락이 유지됩니다.</p>
+          <div class="controls"><span class="meta">근거</span><div class="segmented" role="group" aria-label="근거 표시 모드"><button type="button" id="mode-simple" class="active">기본</button><button type="button" id="mode-precise">문장 강조</button></div></div>
           <form id="chat-form"><input id="chat-query" placeholder="영상에서 RAG 구축 순서를 설명해줘"><button>질문</button></form>
           <div id="answer" class="chat-log"></div>
         </div>
@@ -69,6 +71,10 @@
     let analysisEventSource = null;
     let analysisEventVideoId = null;
     let chatTurns = [];
+    let chatHistoryCursor = null;
+    let chatHistoryHasMore = false;
+    let chatHistoryLoading = false;
+    let evidenceMode = 'simple';
     const byId = (id) => document.getElementById(id);
     const esc = (text = '') => String(text).replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
     const toast = (message) => { const el = byId('toast'); el.textContent = message; el.style.display = 'block'; setTimeout(() => el.style.display = 'none', 3200); };
@@ -202,11 +208,45 @@
         player.onplay = () => { player.playbackRate = 1.5; currentAudio = player; };
       });
       container.scrollTop = container.scrollHeight;
+    function highlightedQuote(item) {
+      const quote = String(item.quote || '');
+      const highlight = item.highlight && item.highlight.text ? String(item.highlight.text) : '';
+      const index = highlight ? quote.indexOf(highlight) : -1;
+      if (index < 0) return esc(quote);
+      return `${esc(quote.slice(0, index))}<span class="highlight">${esc(highlight)}</span>${esc(quote.slice(index + highlight.length))}`;
     }
-    async function loadChatHistory() {
-      try { const history = await chatApi('/chat/history'); chatTurns = (history.messages || []).map(message => ({role: message.role, content: message.content, evidence: []})); }
-      catch (_) { chatTurns = []; }
-      renderLog();
+    function evidenceHtml(evidence = []) {
+      if (!evidence.length) return '';
+      const rows = evidence.map(item => `<a class="evidence ${item.is_primary ? 'primary' : ''}" href="${esc(playbackUrl(item.url))}" target="_blank" rel="noreferrer"><span class="evidence-head"><span class="evidence-time">${Math.floor(item.start_seconds / 60)}:${String(Math.floor(item.start_seconds % 60)).padStart(2,'0')}–${Math.floor(item.end_seconds / 60)}:${String(Math.floor(item.end_seconds % 60)).padStart(2,'0')}</span>${item.is_primary ? '<span class="badge">주요</span>' : ''}<span class="evidence-source">${esc(item.title)}</span></span><span class="evidence-quote">${highlightedQuote(item)}</span></a>`).join('');
+      return `<div class="evidence-list"><p class="evidence-title">참고 구간</p>${rows}</div>`;
+    }
+    function renderLog(stickToBottom = true) {
+      const container = byId('answer');
+      if (!chatTurns.length) { container.innerHTML = '<p class="empty">아직 대화 기록이 없습니다. 질문을 입력해 보세요.</p>'; return; }
+      container.innerHTML = chatTurns.map(turn => `<div class="msg ${turn.role}">${esc(turn.content)}</div>${turn.role === 'assistant' ? evidenceHtml(turn.evidence) : ''}`).join('');
+      if (stickToBottom) container.scrollTop = container.scrollHeight;
+    }
+    const chatTurnFromMessage = (message) => ({id: message.id, role: message.role, content: message.content, evidence: Array.isArray(message.evidence) ? message.evidence : []});
+    async function loadChatHistory({beforeId = null, prepend = false} = {}) {
+      if (chatHistoryLoading) return;
+      chatHistoryLoading = true;
+      const container = byId('answer');
+      const previousHeight = container.scrollHeight;
+      try {
+        const params = new URLSearchParams({limit: '20'});
+        if (beforeId) params.set('before_id', beforeId);
+        const history = await chatApi(`/chat/history?${params.toString()}`);
+        const messages = history.items || history.messages || [];
+        const turns = messages.map(chatTurnFromMessage);
+        chatHistoryCursor = history.next_cursor || null;
+        chatHistoryHasMore = Boolean(history.has_more);
+        chatTurns = prepend ? turns.concat(chatTurns) : turns;
+        renderLog(!prepend);
+        if (prepend) container.scrollTop = container.scrollHeight - previousHeight;
+      }
+      catch (_) { if (!prepend) chatTurns = []; }
+      finally { chatHistoryLoading = false; }
+      if (!prepend) renderLog();
     }
     async function analyzeSelectedVideo() { try { const result = await api(`/videos/${selectedVideo.id}/analyze`, {method:'POST'}); toast(`분석 작업 ${result.job_id}번을 등록했습니다. Worker가 처리합니다.`); selectedVideo.analysis_status = 'queued'; selectedVideo.analysis_stage = 'queued'; selectedVideo.analysis_message = '분석 작업을 기다리고 있습니다.'; selectedVideo.analysis_error = null; renderSelectedVideo(); openAnalysisEvents(selectedVideo.id); await loadVideos(); } catch (error) { toast(error.message); } }
     byId('channel-form').onsubmit = async (event) => { event.preventDefault(); try { const channel = await api('/channels', {method:'POST', body:JSON.stringify({url:byId('channel-url').value})}); byId('channel-url').value = ''; selectedChannelId = channel.id; toast('채널을 등록했습니다. 새 영상 탐색을 실행하세요.'); await loadChannels(); } catch (error) { toast(error.message); } };
@@ -222,9 +262,9 @@
       chatTurns.push(assistantTurn);
       renderLog();
       try {
-        await streamChat('/chat/stream', {method:'POST', body:JSON.stringify({query, video_id: selectedVideo ? selectedVideo.id : null})}, (type, data) => {
+        await streamChat('/chat/stream', {method:'POST', body:JSON.stringify({query, video_id: selectedVideo ? selectedVideo.id : null, evidence_mode: evidenceMode})}, (type, data) => {
           if (type === 'evidence') assistantTurn.evidence = data.evidence || [];
-          if (type === 'token') { assistantTurn.content += data.text || ''; renderLog(); }
+          if (type === 'token') { assistantTurn.content = data.text || ''; renderLog(); }
           if (type === 'done') { assistantTurn.evidence = data.evidence || assistantTurn.evidence; renderLog(); }
           if (type === 'error') throw new Error(data.message || 'Chat 응답 생성에 실패했습니다.');
         });
@@ -234,6 +274,18 @@
         toast(error.message);
       } finally { button.disabled = false; }
     };
+    byId('answer').addEventListener('scroll', () => {
+      if (byId('answer').scrollTop <= 24 && chatHistoryHasMore && chatHistoryCursor && !chatHistoryLoading) {
+        loadChatHistory({beforeId: chatHistoryCursor, prepend: true});
+      }
+    });
+    function setEvidenceMode(mode) {
+      evidenceMode = mode;
+      byId('mode-simple').classList.toggle('active', mode === 'simple');
+      byId('mode-precise').classList.toggle('active', mode === 'precise');
+    }
+    byId('mode-simple').onclick = () => setEvidenceMode('simple');
+    byId('mode-precise').onclick = () => setEvidenceMode('precise');
     async function loadWorkspace() { const workspace = await api('/auth/me'); byId('workspace-code').textContent = `작업공간 코드: ${workspace.workspace_code}`; }
     byId('connect-workspace').onclick = async () => { const code = window.prompt('기존 작업공간 코드를 입력하세요.'); if (!code) return; try { const workspace = await api('/auth/workspace', {method:'POST', body:JSON.stringify({workspace_code:code})}); closeAnalysisEvents(); selectedChannelId = null; selectedVideo = null; byId('workspace-code').textContent = `작업공간 코드: ${workspace.workspace_code}`; await loadChannels(); await loadChatHistory(); toast('기존 작업공간에 연결했습니다.'); } catch (error) { toast(error.message); } };
     byId('new-workspace').onclick = async () => { if (!window.confirm('새 작업공간으로 전환할까요? 현재 작업공간은 코드로 다시 연결할 수 있습니다.')) return; const workspace = await api('/auth/new-workspace', {method:'POST'}); closeAnalysisEvents(); selectedChannelId = null; selectedVideo = null; byId('workspace-code').textContent = `작업공간 코드: ${workspace.workspace_code}`; await loadChannels(); await loadChatHistory(); toast('새 작업공간을 만들었습니다.'); };

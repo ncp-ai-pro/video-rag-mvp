@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -36,6 +36,7 @@ class SearchRequest(BaseModel):
 class ChatRequest(SearchRequest):
     limit: int = Field(default=3, ge=1, le=3)
     video_id: Optional[int] = None
+    evidence_mode: Literal["simple", "precise"] = "simple"
 
 
 class WorkspaceConnect(BaseModel):

@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Iterator, List, Optional
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -433,32 +434,72 @@ def upsert_video(channel_id: int, raw: Dict) -> int:
         return row["id"]
 
 
+def _yt_dlp_failure_message(result: subprocess.CompletedProcess) -> str:
+    output = "\n".join(part for part in (result.stderr, result.stdout) if part)
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    error_lines = [line for line in lines if "error:" in line.lower()]
+    return (error_lines or lines or ["yt-dlp exited without an error message"])[-1][:500]
+
+
+def _youtube_video_id(url: str) -> Optional[str]:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower().removeprefix("www.").removeprefix("m.")
+    if host == "youtu.be":
+        return parsed.path.strip("/").split("/", 1)[0] or None
+    if host not in {"youtube.com", "music.youtube.com"}:
+        return None
+    if parsed.path == "/watch":
+        return parse_qs(parsed.query).get("v", [None])[0]
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) >= 2 and parts[0] in {"shorts", "embed", "live"}:
+        return parts[1]
+    return None
+
+
+def _video_metadata_from_ytdlp(item: Dict, fallback_video_id: Optional[str] = None) -> Dict:
+    video_id = item.get("id") or fallback_video_id
+    if not video_id:
+        raise RuntimeError("yt-dlp did not return a video id")
+    return {
+        "platform_video_id": video_id,
+        "title": item.get("title") or video_id,
+        "description": item.get("description") or "",
+        "url": item.get("webpage_url") or "https://www.youtube.com/watch?v=" + video_id,
+        "thumbnail_url": item.get("thumbnail"),
+        "duration_seconds": item.get("duration"),
+        "uploaded_at": item.get("upload_date"),
+    }
+
+
 def collect_channel_metadata(url: str) -> List[Dict]:
-    """Fetches playlist entries only; --flat-playlist never downloads media."""
+    """Fetches channel/playlist metadata, or a single video when the registered URL is a watch URL."""
+    single_video_id = _youtube_video_id(url)
+    if single_video_id:
+        result = subprocess.run(
+            [config.YTDLP_BIN, "--dump-single-json", "--skip-download", "--no-playlist", url],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode:
+            raise RuntimeError("video_metadata_failed: " + _yt_dlp_failure_message(result))
+        return [_video_metadata_from_ytdlp(json.loads(result.stdout), single_video_id)]
+
     result = subprocess.run(
         [config.YTDLP_BIN, "--flat-playlist", "--dump-json", "--skip-download", url],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         timeout=300,
     )
+    if result.returncode:
+        raise RuntimeError("channel_metadata_failed: " + _yt_dlp_failure_message(result))
     videos = []
     for line in result.stdout.splitlines():
-        item = json.loads(line)
-        video_id = item.get("id")
-        if not video_id:
+        if not line.strip():
             continue
-        videos.append(
-            {
-                "platform_video_id": video_id,
-                "title": item.get("title") or video_id,
-                "description": item.get("description") or "",
-                "url": item.get("webpage_url") or "https://www.youtube.com/watch?v=" + video_id,
-                "thumbnail_url": item.get("thumbnail"),
-                "duration_seconds": item.get("duration"),
-                "uploaded_at": item.get("upload_date"),
-            }
-        )
+        videos.append(_video_metadata_from_ytdlp(json.loads(line)))
     return videos
 
 
@@ -466,24 +507,66 @@ def import_transcript(
     video_id: int,
     segments: List[Dict],
     *,
+    paragraphs: Optional[List[Dict]] = None,
     mark_analyzed: bool = True,
     embed_text: Callable[[str], List[float]] = embedding,
 ):
+    if paragraphs is None:
+        paragraphs = [
+            {
+                "paragraph_index": index,
+                "start_seconds": segment["start_seconds"],
+                "end_seconds": segment["end_seconds"],
+                "text": segment["text"],
+            }
+            for index, segment in enumerate(segments)
+        ]
+        segments = [
+            {
+                **segment,
+                "paragraph_index": index,
+                "chunk_index": 0,
+            }
+            for index, segment in enumerate(segments)
+        ]
+
     with connection() as conn:
         exists = conn.execute("SELECT id FROM videos WHERE id=?", (video_id,)).fetchone()
         if not exists:
             raise LookupError("video not found")
         conn.execute("DELETE FROM transcript_chunks WHERE video_id=?", (video_id,))
+        conn.execute("DELETE FROM transcript_paragraphs WHERE video_id=?", (video_id,))
+        paragraph_ids = {}
+        for index, paragraph in enumerate(paragraphs):
+            start_seconds = paragraph["start_seconds"]
+            end_seconds = paragraph["end_seconds"]
+            if end_seconds <= start_seconds:
+                raise ValueError("paragraph end_seconds must be greater than start_seconds")
+            paragraph_index = paragraph.get("paragraph_index", index)
+            row = conn.execute(
+                """
+                INSERT INTO transcript_paragraphs(video_id, paragraph_index, start_seconds, end_seconds, text)
+                VALUES (?, ?, ?, ?, ?)
+                RETURNING id
+                """,
+                (video_id, paragraph_index, start_seconds, end_seconds, paragraph["text"]),
+            ).fetchone()
+            paragraph_ids[paragraph_index] = row["id"]
         for segment in segments:
             if segment["end_seconds"] <= segment["start_seconds"]:
                 raise ValueError("end_seconds must be greater than start_seconds")
+            paragraph_id = paragraph_ids.get(segment.get("paragraph_index"))
             conn.execute(
                 """
-                INSERT INTO transcript_chunks(video_id, start_seconds, end_seconds, text, embedding)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO transcript_chunks(
+                    video_id, paragraph_id, chunk_index, start_seconds, end_seconds, text, embedding
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     video_id,
+                    paragraph_id,
+                    segment.get("chunk_index", 0),
                     segment["start_seconds"],
                     segment["end_seconds"],
                     segment["text"],
@@ -562,18 +645,64 @@ def find_metadata(user_id: int, query: str, limit: int) -> List[Dict]:
     return sorted(results, key=lambda item: item["score"], reverse=True)[:limit]
 
 
-def find_evidence(user_id: int, query: str, limit: int, video_id: Optional[int] = None) -> List[Dict]:
+def _split_evidence_sentences(text: str) -> List[str]:
+    sentences = [match.group(0).strip() for match in re.finditer(r"[^.!?。！？]+(?:[.!?。！？]+|$)", text)]
+    return [sentence for sentence in sentences if sentence]
+
+
+def _token_overlap_highlight(query: str, text: str) -> Optional[Dict]:
+    query_tokens = set(_tokens(query))
+    if not query_tokens:
+        return None
+    best_sentence, best_matches = "", 0
+    for sentence in _split_evidence_sentences(text):
+        sentence_tokens = set(_tokens(sentence))
+        matches = sum(
+            1
+            for query_token in query_tokens
+            if any(query_token in sentence_token or sentence_token in query_token for sentence_token in sentence_tokens)
+        )
+        if matches > best_matches:
+            best_sentence, best_matches = sentence, matches
+    if not best_sentence or best_matches == 0:
+        return None
+    return {
+        "text": best_sentence,
+        "method": "query_token_overlap",
+        "score": round(best_matches / len(query_tokens), 4),
+    }
+
+
+def _decorate_evidence(evidence: List[Dict], query: str, evidence_mode: str) -> List[Dict]:
+    decorated = []
+    for index, item in enumerate(evidence, start=1):
+        enriched = {**item, "rank": index, "is_primary": index == 1}
+        if evidence_mode == "precise":
+            highlight = _token_overlap_highlight(query, item.get("quote") or item.get("context") or "")
+            if highlight:
+                enriched["highlight"] = highlight
+        decorated.append(enriched)
+    return decorated
+
+
+def find_evidence(
+    user_id: int, query: str, limit: int, video_id: Optional[int] = None, evidence_mode: str = "simple"
+) -> List[Dict]:
     query_vector = embedding(query)
     video_filter = " AND videos.id=?" if video_id is not None else ""
     video_params = (video_id,) if video_id is not None else ()
+    expanded_limit = max(limit * 4, limit)
     with connection() as conn:
         if is_postgres():
             rows = conn.execute(
                 """
-                SELECT chunks.start_seconds, chunks.end_seconds, chunks.text,
+                SELECT chunks.id AS chunk_id, chunks.paragraph_id,
+                       chunks.start_seconds, chunks.end_seconds, chunks.text,
+                       paragraphs.text AS paragraph_text,
                        videos.id AS video_id, videos.title, videos.url,
                        1 - (chunks.embedding <=> ?::vector) AS score
                 FROM transcript_chunks AS chunks
+                LEFT JOIN transcript_paragraphs AS paragraphs ON paragraphs.id = chunks.paragraph_id
                 JOIN videos ON videos.id = chunks.video_id
                 JOIN channels ON channels.id = videos.channel_id
                 WHERE videos.analysis_status IN ('succeeded', 'ready') AND channels.user_id=?"""
@@ -582,28 +711,41 @@ def find_evidence(user_id: int, query: str, limit: int, video_id: Optional[int] 
                 ORDER BY chunks.embedding <=> ?::vector
                 LIMIT ?
                 """,
-                (json.dumps(query_vector), user_id, *video_params, json.dumps(query_vector), limit),
+                (json.dumps(query_vector), user_id, *video_params, json.dumps(query_vector), expanded_limit),
             ).fetchall()
             evidence = []
+            seen = set()
             for row in rows:
+                dedupe_key = (row["video_id"], row["paragraph_id"] or row["chunk_id"])
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
                 separator = "&" if "?" in row["url"] else "?"
                 evidence.append(
                     {
+                        "chunk_id": row["chunk_id"],
+                        "paragraph_id": row["paragraph_id"],
                         "video_id": row["video_id"],
                         "title": row["title"],
                         "start_seconds": row["start_seconds"],
                         "end_seconds": row["end_seconds"],
                         "quote": row["text"],
+                        "context": row["paragraph_text"] or row["text"],
                         "url": row["url"] + separator + "t=" + str(int(row["start_seconds"])) + "s",
                         "score": round(float(row["score"]), 4),
                     }
                 )
-            return evidence
+                if len(evidence) >= limit:
+                    break
+            return _decorate_evidence(evidence, query, evidence_mode)
         rows = conn.execute(
             """
-            SELECT chunks.start_seconds, chunks.end_seconds, chunks.text, chunks.embedding,
+            SELECT chunks.id AS chunk_id, chunks.paragraph_id,
+                   chunks.start_seconds, chunks.end_seconds, chunks.text, chunks.embedding,
+                   paragraphs.text AS paragraph_text,
                    videos.id AS video_id, videos.title, videos.url
             FROM transcript_chunks AS chunks
+            LEFT JOIN transcript_paragraphs AS paragraphs ON paragraphs.id = chunks.paragraph_id
             JOIN videos ON videos.id = chunks.video_id
             JOIN channels ON channels.id = videos.channel_id
             WHERE videos.analysis_status IN ('succeeded', 'ready') AND channels.user_id=?"""
@@ -617,25 +759,39 @@ def find_evidence(user_id: int, query: str, limit: int, video_id: Optional[int] 
         separator = "&" if "?" in row["url"] else "?"
         evidence.append(
             {
+                "chunk_id": row["chunk_id"],
+                "paragraph_id": row["paragraph_id"],
                 "video_id": row["video_id"],
                 "title": row["title"],
                 "start_seconds": row["start_seconds"],
                 "end_seconds": row["end_seconds"],
                 "quote": row["text"],
+                "context": row["paragraph_text"] or row["text"],
                 "url": row["url"] + separator + "t=" + str(int(row["start_seconds"])) + "s",
                 "score": round(cosine(query_vector, json.loads(row["embedding"])), 4),
             }
         )
-    return sorted(evidence, key=lambda item: item["score"], reverse=True)[:limit]
+    deduped = []
+    seen = set()
+    for item in sorted(evidence, key=lambda item: item["score"], reverse=True):
+        dedupe_key = (item["video_id"], item["paragraph_id"] or item["chunk_id"])
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        deduped.append(item)
+        if len(deduped) >= limit:
+            break
+    return _decorate_evidence(deduped, query, evidence_mode)
 
 
-def record_chat_message(user_id: int, role: str, content: str) -> None:
+def record_chat_message(user_id: int, role: str, content: str, evidence: Optional[List[Dict]] = None) -> None:
     """Appends a turn and prunes the workspace's history to the configured retention window."""
     keep = max(0, config.CHAT_HISTORY_TURNS) * 2
+    evidence_json = json.dumps(evidence, ensure_ascii=False, separators=(",", ":")) if evidence else None
     with connection() as conn:
         conn.execute(
-            "INSERT INTO chat_messages(user_id, role, content) VALUES (?, ?, ?)",
-            (user_id, role, content),
+            "INSERT INTO chat_messages(user_id, role, content, evidence_json) VALUES (?, ?, ?, ?)",
+            (user_id, role, content, evidence_json),
         )
         conn.execute(
             """
@@ -648,22 +804,80 @@ def record_chat_message(user_id: int, role: str, content: str) -> None:
         )
 
 
-def recent_chat_history(user_id: int) -> List[Dict[str, str]]:
+def recent_chat_history(user_id: int, *, include_evidence: bool = False) -> List[Dict]:
     """Returns this workspace's last CHAT_HISTORY_TURNS turns in chronological order."""
     limit = max(0, config.CHAT_HISTORY_TURNS) * 2
     if limit == 0:
         return []
     with connection() as conn:
         rows = conn.execute(
-            "SELECT role, content FROM chat_messages WHERE user_id=? ORDER BY id DESC LIMIT ?",
+            "SELECT role, content, evidence_json FROM chat_messages WHERE user_id=? ORDER BY id DESC LIMIT ?",
             (user_id, limit),
         ).fetchall()
-    return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+    history = []
+    for row in reversed(rows):
+        item = {"role": row["role"], "content": row["content"]}
+        if include_evidence:
+            try:
+                evidence_json = row["evidence_json"]
+                item["evidence"] = json.loads(evidence_json) if evidence_json else []
+            except (TypeError, ValueError, json.JSONDecodeError):
+                item["evidence"] = []
+        history.append(item)
+    return history
+
+
+def _chat_message_item(row: Dict) -> Dict:
+    created_at = row["created_at"]
+    if isinstance(created_at, datetime):
+        created_at = created_at.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    elif created_at and "T" not in created_at:
+        created_at = str(created_at).replace(" ", "T") + "Z"
+    try:
+        evidence = json.loads(row["evidence_json"]) if row["evidence_json"] else []
+    except (TypeError, ValueError, json.JSONDecodeError):
+        evidence = []
+    return {
+        "id": row["id"],
+        "role": row["role"],
+        "content": row["content"],
+        "evidence": evidence,
+        "created_at": created_at,
+    }
+
+
+def paged_chat_history(user_id: int, *, limit: int = 20, before_id: Optional[int] = None) -> Dict:
+    """Returns a cursor page for UI history; LLM context still uses recent_chat_history()."""
+    page_size = min(max(limit, 1), 100)
+    query = """
+        SELECT id, role, content, evidence_json, created_at
+        FROM chat_messages
+        WHERE user_id=?
+    """
+    params: List = [user_id]
+    if before_id is not None:
+        query += " AND id < ?"
+        params.append(before_id)
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(page_size + 1)
+    with connection() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    has_more = len(rows) > page_size
+    rows = rows[:page_size]
+    items = [_chat_message_item(row) for row in reversed(rows)]
+    return {
+        "items": items,
+        "messages": items,
+        "has_more": has_more,
+        "next_cursor": items[0]["id"] if has_more and items else None,
+    }
 
 
 def _chat_instruction(evidence: List[Dict]) -> str:
     context = "\n\n".join(
-        "[{} {}-{}]\n{}".format(item["title"], item["start_seconds"], item["end_seconds"], item["quote"])
+        "[{} {}-{}]\n{}".format(
+            item["title"], item["start_seconds"], item["end_seconds"], item.get("context") or item["quote"]
+        )
         for item in evidence
     )
     return (
@@ -716,6 +930,13 @@ def answer(question: str, evidence: List[Dict], history: Optional[List[Dict[str,
     response.raise_for_status()
     return response.json()["result"]["message"]["content"]
 
+def _common_prefix_length(a: str, b: str) -> int:
+    length = min(len(a), len(b))
+    for i in range(length):
+        if a[i] != b[i]:
+            return i
+    return length
+
 
 def stream_answer(question: str, evidence: List[Dict], history: Optional[List[Dict[str, str]]] = None) -> Iterator[str]:
     """Yields answer deltas from CLOVA Studio; does not expose provider events to the browser."""
@@ -751,7 +972,7 @@ def stream_answer(question: str, evidence: List[Dict], history: Optional[List[Di
             content = event.get("message", {}).get("content")
             if not content:
                 continue
-            delta = content[len(previous_content) :] if content.startswith(previous_content) else content
+            delta = content[_common_prefix_length(previous_content, content):]
             previous_content = content
             if delta:
                 yield delta
