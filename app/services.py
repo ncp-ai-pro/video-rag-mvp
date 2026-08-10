@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from . import config
+from . import chat_cache, config
 from .db import connection, is_postgres
 
 
@@ -850,6 +850,10 @@ def record_chat_message(
             """,
             (user_id, *scope_params, user_id, *scope_params, keep),
         )
+    message = {"role": role, "content": content}
+    if evidence:
+        message["evidence"] = evidence
+    chat_cache.append_recent(user_id, message, max_messages=keep)
 
 
 def recent_chat_history(user_id: int, *, include_evidence: bool = False, video_id: Optional[int] = None) -> List[Dict]:
@@ -859,6 +863,10 @@ def recent_chat_history(user_id: int, *, include_evidence: bool = False, video_i
         return []
     scope_condition = _chat_scope_condition(video_id)
     scope_params = (video_id,) if video_id is not None else ()
+    if not include_evidence:
+        cached = chat_cache.get_recent(user_id, include_evidence=False)
+        if cached is not None:
+            return cached
     with connection() as conn:
         rows = conn.execute(
             f"""
@@ -879,6 +887,8 @@ def recent_chat_history(user_id: int, *, include_evidence: bool = False, video_i
             except (TypeError, ValueError, json.JSONDecodeError):
                 item["evidence"] = []
         history.append(item)
+    if not include_evidence:
+        chat_cache.set_recent(user_id, [{"role": item["role"], "content": item["content"]} for item in history])
     return history
 
 

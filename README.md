@@ -13,6 +13,8 @@
 - Chat Server `POST /chat`: 분석 완료된 자막 chunk만 검색하고, 답변과 최대 3개의 실제 재생 시간 링크를 반환한다. `evidence_mode=ultra`는 근거 내부 문장 embedding similarity로 핵심 문장을 고른다.
 - Chat Server `POST /chat/stream`: 같은 근거를 먼저 보내고, Chat 답변 token을 SSE로 중계한다. 기존 `/chat` JSON 응답은 유지한다.
 - Chat은 영상별 최근 `CHAT_HISTORY_TURNS`(기본 3턴) 질문·답변을 `chat_messages` 테이블에 저장했다가 다음 CLOVA 요청의 대화 맥락으로 함께 보낸다. 오래된 턴은 같은 영상 스코프 안에서 저장 시점에 바로 정리된다.
+- Chat은 워크스페이스별 최근 `CHAT_HISTORY_TURNS`(기본 3턴) 질문·답변을 `chat_messages` 테이블에 저장했다가 다음 CLOVA 요청의 대화 맥락으로 함께 보낸다. 오래된 턴은 저장 시점에 바로 정리된다.
+- `REDIS_URL`을 설정하면 Chat Server가 최근 대화 맥락만 Redis에 캐시한다. PostgreSQL `chat_messages`가 원본이며 Redis 장애나 미설정 상태에서는 PostgreSQL 조회로 동작한다.
 
 로컬 기본값은 SQLite `jobs` 테이블과 별도 Worker 프로세스다. `DATABASE_URL`을 설정하면 API·Chat·Worker가 같은 Cloud DB for PostgreSQL에 연결하고, 시작 시 `pgvector` 확장과 1,024차원 RAG vector 스키마를 초기화한다. Worker의 PostgreSQL 작업 선점은 `FOR UPDATE SKIP LOCKED`를 사용한다.
 
@@ -53,7 +55,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-API는 `http://localhost:8000/health`, Chat Server는 `http://localhost:8001/health`에서 확인할 수 있다. NCP 운영 환경에서는 `.env`에 `DATABASE_URL=postgresql://<USER>:<PASSWORD>@<CLOUD_DB_HOST>:5432/<DATABASE>?sslmode=require`, `SESSION_COOKIE_SECURE=true`, `SESSION_COOKIE_DOMAIN=.example.com`, `CORS_ALLOW_ORIGINS=https://api.example.com`, `CHAT_PUBLIC_ORIGIN=https://chat.example.com`을 설정한다. DB 계정에는 `CREATE EXTENSION vector` 실행 권한이 필요하다.
+API는 `http://localhost:8000/health`, Chat Server는 `http://localhost:8001/health`에서 확인할 수 있다. NCP 운영 환경에서는 `.env`에 `DATABASE_URL=postgresql://<USER>:<PASSWORD>@<CLOUD_DB_HOST>:5432/<DATABASE>?sslmode=require`, `SESSION_COOKIE_SECURE=true`, `SESSION_COOKIE_DOMAIN=.example.com`, `CORS_ALLOW_ORIGINS=https://api.example.com`, `CHAT_PUBLIC_ORIGIN=https://chat.example.com`을 설정한다. DB 계정에는 `CREATE EXTENSION vector` 실행 권한이 필요하다. 최근 대화 맥락 조회 부하를 줄일 때만 Chat Server에 `REDIS_URL=redis://<REDIS_HOST>:6379/0`과 `REDIS_CHAT_CACHE_TTL_SECONDS=3600`을 추가한다.
 
 ### 로컬 PostgreSQL + pgvector로 실행
 

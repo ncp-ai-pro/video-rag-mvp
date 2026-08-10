@@ -262,6 +262,127 @@ def test_guest_workspace_is_restored_or_connected_by_code():
             assert second_browser.get("/auth/me").json()["workspace_code"] == first_workspace["workspace_code"]
 
 
+def test_recent_chat_history_uses_cache_hit(monkeypatch):
+    from app import services
+
+    cached = [{"role": "user", "content": "캐시 질문"}, {"role": "assistant", "content": "캐시 답변"}]
+    monkeypatch.setattr(services.chat_cache, "get_recent", lambda *args, **kwargs: cached)
+
+    def fail_connection():
+        raise AssertionError("PostgreSQL should not be queried on a cache hit")
+
+    monkeypatch.setattr(services, "connection", fail_connection)
+
+    assert services.recent_chat_history(42) == cached
+
+
+def test_recent_chat_history_populates_cache_on_miss(monkeypatch):
+    with tempfile.TemporaryDirectory() as directory:
+        os.environ["DATABASE_PATH"] = os.path.join(directory, "chat-cache-miss.db")
+        os.environ["EMBEDDING_PROVIDER"] = "mock"
+        os.environ["CHAT_PROVIDER"] = "mock"
+        from app import config, db, services, workspaces
+
+        importlib.reload(config)
+        importlib.reload(db)
+        importlib.reload(services)
+        importlib.reload(workspaces)
+        db.initialize()
+        workspace = workspaces.create_guest_workspace()
+        captured = {}
+        monkeypatch.setattr(services.chat_cache, "get_recent", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            services.chat_cache,
+            "set_recent",
+            lambda user_id, messages: captured.update({"user_id": user_id, "messages": messages}),
+        )
+
+        services.record_chat_message(workspace["id"], "user", "DB 질문")
+        services.record_chat_message(workspace["id"], "assistant", "DB 답변")
+        history = services.recent_chat_history(workspace["id"])
+
+        assert history == [{"role": "user", "content": "DB 질문"}, {"role": "assistant", "content": "DB 답변"}]
+        assert captured == {"user_id": workspace["id"], "messages": history}
+
+
+def test_recent_chat_history_with_evidence_bypasses_cache(monkeypatch):
+    with tempfile.TemporaryDirectory() as directory:
+        os.environ["DATABASE_PATH"] = os.path.join(directory, "chat-cache-evidence.db")
+        os.environ["EMBEDDING_PROVIDER"] = "mock"
+        os.environ["CHAT_PROVIDER"] = "mock"
+        from app import config, db, services, workspaces
+
+        importlib.reload(config)
+        importlib.reload(db)
+        importlib.reload(services)
+        importlib.reload(workspaces)
+        db.initialize()
+        workspace = workspaces.create_guest_workspace()
+        services.record_chat_message(workspace["id"], "assistant", "근거 답변", [{"video_id": 1}])
+
+        def fail_cache(*args, **kwargs):
+            raise AssertionError("evidence history should read PostgreSQL, not Redis cache")
+
+        monkeypatch.setattr(services.chat_cache, "get_recent", fail_cache)
+        monkeypatch.setattr(services.chat_cache, "set_recent", fail_cache)
+
+        assert services.recent_chat_history(workspace["id"], include_evidence=True) == [
+            {"role": "assistant", "content": "근거 답변", "evidence": [{"video_id": 1}]}
+        ]
+
+
+def test_record_chat_message_updates_cache_after_postgres_write(monkeypatch):
+    with tempfile.TemporaryDirectory() as directory:
+        os.environ["DATABASE_PATH"] = os.path.join(directory, "chat-cache-append.db")
+        os.environ["EMBEDDING_PROVIDER"] = "mock"
+        os.environ["CHAT_PROVIDER"] = "mock"
+        os.environ["CHAT_HISTORY_TURNS"] = "3"
+        from app import config, db, services, workspaces
+
+        importlib.reload(config)
+        importlib.reload(db)
+        importlib.reload(services)
+        importlib.reload(workspaces)
+        db.initialize()
+        workspace = workspaces.create_guest_workspace()
+        appended = []
+        monkeypatch.setattr(services.chat_cache, "append_recent", lambda *args, **kwargs: appended.append((args, kwargs)))
+
+        services.record_chat_message(workspace["id"], "assistant", "답변", [{"video_id": 1}])
+
+        assert appended == [
+            (
+                (workspace["id"], {"role": "assistant", "content": "답변", "evidence": [{"video_id": 1}]}),
+                {"max_messages": 6},
+            )
+        ]
+
+
+def test_recent_chat_history_falls_back_when_cache_fails(monkeypatch):
+    with tempfile.TemporaryDirectory() as directory:
+        os.environ["DATABASE_PATH"] = os.path.join(directory, "chat-cache-fallback.db")
+        os.environ["EMBEDDING_PROVIDER"] = "mock"
+        os.environ["CHAT_PROVIDER"] = "mock"
+        from app import chat_cache, config, db, services, workspaces
+
+        importlib.reload(config)
+        importlib.reload(db)
+        importlib.reload(chat_cache)
+        importlib.reload(services)
+        importlib.reload(workspaces)
+        db.initialize()
+        workspace = workspaces.create_guest_workspace()
+        services.record_chat_message(workspace["id"], "user", "fallback 질문")
+
+        class BrokenRedis:
+            def lrange(self, *args, **kwargs):
+                raise RuntimeError("redis down")
+
+        monkeypatch.setattr(chat_cache, "_redis_client", lambda: BrokenRedis())
+
+        assert services.recent_chat_history(workspace["id"]) == [{"role": "user", "content": "fallback 질문"}]
+
+
 def test_chat_router_keeps_post_contract_and_workspace_scope():
     with tempfile.TemporaryDirectory() as directory:
         os.environ["DATABASE_PATH"] = os.path.join(directory, "chat.db")

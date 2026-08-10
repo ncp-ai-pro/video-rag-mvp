@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
+load_dotenv()
 
 ROOT = Path(__file__).resolve().parents[1]
 DATABASE_PATH = Path(os.getenv("DATABASE_PATH", ROOT / "data" / "video_rag.db"))
@@ -10,6 +12,8 @@ CHAT_PROVIDER = os.getenv("CHAT_PROVIDER", "mock").lower()
 CLOVASTUDIO_API_KEY = os.getenv("CLOVASTUDIO_API_KEY")
 CLOVA_MODEL = os.getenv("CLOVA_MODEL", "HCX-DASH-002")
 CHAT_HISTORY_TURNS = int(os.getenv("CHAT_HISTORY_TURNS", "3"))
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+REDIS_CHAT_CACHE_TTL_SECONDS = int(os.getenv("REDIS_CHAT_CACHE_TTL_SECONDS", str(60 * 60)))
 CLOVA_SPEECH_INVOKE_URL = os.getenv("CLOVA_SPEECH_INVOKE_URL")
 CLOVA_SPEECH_API_KEY = os.getenv("CLOVA_SPEECH_API_KEY")
 CLOVA_SPEECH_LANGUAGE = os.getenv("CLOVA_SPEECH_LANGUAGE", "ko-KR")
@@ -38,3 +42,7 @@ CORS_ALLOW_ORIGINS = tuple(
     origin.strip() for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if origin.strip()
 )
 CHAT_PUBLIC_ORIGIN = os.getenv("CHAT_PUBLIC_ORIGIN", "").rstrip("/")
+
+CLOVA_VOICE_CLIENT_ID = os.getenv("CLOVA_VOICE_CLIENT_ID", "")
+CLOVA_VOICE_CLIENT_SECRET = os.getenv("CLOVA_VOICE_CLIENT_SECRET", "")
+CLOVA_VOICE_URL = os.getenv("CLOVA_VOICE_URL", "")
