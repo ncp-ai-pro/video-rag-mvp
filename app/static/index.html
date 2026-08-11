@@ -58,6 +58,7 @@
           <p class="analysis-note">선택한 영상의 자막에서 근거 구간을 최대 3개 반환합니다. 최근 3턴의 대화 맥락은 영상별로 유지됩니다.</p>
           <div class="controls"><span class="meta">근거</span><div class="segmented" role="group" aria-label="근거 표시 모드"><button type="button" id="mode-simple" class="active">기본</button><button type="button" id="mode-precise">문장 강조</button><button type="button" id="mode-ultra">의미 강조</button></div></div>
           <form id="chat-form"><input id="chat-query" placeholder="영상에서 RAG 구축 순서를 설명해줘"><button>질문</button></form>
+          <div class="controls"><span class="meta">목소리</span><div class="segmented" role="group" aria-label="음성 선택"><button type="button" id="voice-female" class="active">여성</button><button type="button" id="voice-male">남성</button></div></div>
           <div id="answer" class="chat-log"></div>
         </div>
       </div>
@@ -75,6 +76,7 @@
     let chatHistoryHasMore = false;
     let chatHistoryLoading = false;
     let evidenceMode = 'simple';
+    let ttsSpeaker = 'nyounghwa';
     const byId = (id) => document.getElementById(id);
     const esc = (text = '') => String(text).replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
     const toast = (message) => { const el = byId('toast'); el.textContent = message; el.style.display = 'block'; setTimeout(() => el.style.display = 'none', 3200); };
@@ -112,7 +114,7 @@
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text })
+          body: JSON.stringify({ text , speaker: ttsSpeaker })
         });
         if (!response.ok) throw new Error('음성 생성에 실패했습니다.');
         currentAudioUrl = URL.createObjectURL(await response.blob());
@@ -196,7 +198,6 @@
         return target.toString();
       } catch (_) { return rawUrl; }
     }
-    function evidenceHtml(evidence = []) { return evidence.map(item => `<div class="evidence"><a href="${esc(playbackUrl(item.url))}" target="_blank" rel="noreferrer">${esc(item.title)} · ${Math.floor(item.start_seconds / 60)}:${String(Math.floor(item.start_seconds % 60)).padStart(2,'0')}–${Math.floor(item.end_seconds / 60)}:${String(Math.floor(item.end_seconds % 60)).padStart(2,'0')}</a><br><span class="meta">${esc(item.quote)}</span></div>`).join(''); }
     function ttsButtonHtml(turn, index) {
       if (!turn.content.trim()) return '';
       if (currentTtsIndex === index && currentAudioUrl) {
@@ -204,23 +205,6 @@
       }
       return `<div class="controls"><button class="secondary" data-tts-index="${index}">🔊 답변 듣기</button></div>`;
     }
-    function renderLog() {
-      const container = byId('answer');
-      if (!chatTurns.length) { container.innerHTML = '<p class="empty">아직 대화 기록이 없습니다. 질문을 입력해 보세요.</p>'; return; }
-      container.innerHTML = chatTurns.map((turn, index) => `<div class="msg ${turn.role}">${esc(turn.content)}</div>${turn.role === 'assistant' ? ttsButtonHtml(turn, index) + evidenceHtml(turn.evidence) : ''}`).join('');
-      container.querySelectorAll('[data-tts-index]').forEach(button => {
-        button.onclick = async () => {
-          const index = Number(button.dataset.ttsIndex);
-          button.disabled = true; button.textContent = '생성 중...';
-          try { await playAnswer(chatTurns[index].content, index); }
-          catch (error) { toast(error.message); button.disabled = false; button.textContent = '🔊 답변 듣기'; }
-        };
-      });
-      container.querySelectorAll('[data-tts-player]').forEach(player => {
-        player.playbackRate = 1.5;
-        player.onplay = () => { player.playbackRate = 1.5; currentAudio = player; };
-      });
-      container.scrollTop = container.scrollHeight;
     function highlightedQuote(item) {
       const quote = String(item.quote || '');
       const highlight = item.highlight && item.highlight.text ? String(item.highlight.text) : '';
@@ -236,7 +220,19 @@
     function renderLog(stickToBottom = true) {
       const container = byId('answer');
       if (!chatTurns.length) { container.innerHTML = `<p class="empty">${selectedVideo ? '이 영상의 대화 기록이 없습니다. 질문을 입력해 보세요.' : '질문할 영상을 먼저 선택하세요.'}</p>`; return; }
-      container.innerHTML = chatTurns.map(turn => `<div class="msg ${turn.role}">${esc(turn.content)}</div>${turn.role === 'assistant' ? evidenceHtml(turn.evidence) : ''}`).join('');
+      container.innerHTML = chatTurns.map((turn, index) => `<div class="msg ${turn.role}">${esc(turn.content)}</div>${turn.role === 'assistant' ? ttsButtonHtml(turn, index) + evidenceHtml(turn.evidence) : ''}`).join('');
+      container.querySelectorAll('[data-tts-index]').forEach(button => {
+        button.onclick = async () => {
+          const index = Number(button.dataset.ttsIndex);
+          button.disabled = true; button.textContent = '생성 중...';
+          try { await playAnswer(chatTurns[index].content, index); }
+          catch (error) { toast(error.message); button.disabled = false; button.textContent = '🔊 답변 듣기'; }
+        };
+      });
+      container.querySelectorAll('[data-tts-player]').forEach(player => {
+        player.playbackRate = 1.0;
+        player.onplay = () => { player.playbackRate = 1.0; currentAudio = player; };
+      });
       if (stickToBottom) container.scrollTop = container.scrollHeight;
     }
     const chatTurnFromMessage = (message) => ({id: message.id, role: message.role, content: message.content, evidence: Array.isArray(message.evidence) ? message.evidence : []});
@@ -300,6 +296,14 @@
       byId('mode-precise').classList.toggle('active', mode === 'precise');
       byId('mode-ultra').classList.toggle('active', mode === 'ultra');
     }
+    function setTtsSpeaker(speaker) {
+      if (ttsSpeaker !== speaker) stopAudio();
+      ttsSpeaker = speaker;
+      byId('voice-female').classList.toggle('active', speaker === 'nyounghwa');
+      byId('voice-male').classList.toggle('active', speaker === 'njihun');
+    }
+    byId('voice-female').onclick = () => setTtsSpeaker('nyounghwa');
+    byId('voice-male').onclick = () => setTtsSpeaker('njihun');
     byId('mode-simple').onclick = () => setEvidenceMode('simple');
     byId('mode-precise').onclick = () => setEvidenceMode('precise');
     byId('mode-ultra').onclick = () => setEvidenceMode('ultra');
