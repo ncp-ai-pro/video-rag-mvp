@@ -172,6 +172,16 @@ def _normalize(vector: List[float]) -> List[float]:
     return [value / norm for value in vector] if norm else vector
 
 
+def has_video_embedding(video_id: int) -> bool:
+    """Returns whether this video already has transcript chunks embedded."""
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM transcript_chunks WHERE video_id=? LIMIT 1",
+            (video_id,),
+        ).fetchone()
+    return row is not None
+
+
 def embedding(text: str) -> List[float]:
     if config.EMBEDDING_PROVIDER == "mock":
         return _mock_embedding(text)

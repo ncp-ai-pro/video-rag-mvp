@@ -1,6 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { STATUS_LABEL } from '@/lib/format'
-import { isAnalysisActive, isAnalyzed, type AnalysisStatus } from '@/lib/types'
+import { isAnalysisActive, isAnalyzed, type AnalysisStatus } from '@/api/types'
 
 const variantFor = (status: AnalysisStatus) => {
   if (isAnalyzed(status)) return 'default' as const

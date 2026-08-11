@@ -205,6 +205,24 @@
       }
       return `<div class="controls"><button class="secondary" data-tts-index="${index}">🔊 답변 듣기</button></div>`;
     }
+    function renderLog() {
+      const container = byId('answer');
+      if (!chatTurns.length) { container.innerHTML = '<p class="empty">아직 대화 기록이 없습니다. 질문을 입력해 보세요.</p>'; return; }
+      container.innerHTML = chatTurns.map((turn, index) => `<div class="msg ${turn.role}">${esc(turn.content)}</div>${turn.role === 'assistant' ? ttsButtonHtml(turn, index) + evidenceHtml(turn.evidence) : ''}`).join('');
+      container.querySelectorAll('[data-tts-index]').forEach(button => {
+        button.onclick = async () => {
+          const index = Number(button.dataset.ttsIndex);
+          button.disabled = true; button.textContent = '생성 중...';
+          try { await playAnswer(chatTurns[index].content, index); }
+          catch (error) { toast(error.message); button.disabled = false; button.textContent = '🔊 답변 듣기'; }
+        };
+      });
+      container.querySelectorAll('[data-tts-player]').forEach(player => {
+        player.playbackRate = 1.5;
+        player.onplay = () => { player.playbackRate = 1.5; currentAudio = player; };
+      });
+      container.scrollTop = container.scrollHeight;
+    }
     function highlightedQuote(item) {
       const quote = String(item.quote || '');
       const highlight = item.highlight && item.highlight.text ? String(item.highlight.text) : '';

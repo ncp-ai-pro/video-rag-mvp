@@ -13,6 +13,7 @@ from .services import (
     EmbeddingRateLimiter,
     collect_channel_metadata,
     finish_analysis,
+    has_video_embedding,
     import_transcript,
     normalize_clova_speech_segments,
     object_storage_is_configured,
@@ -232,6 +233,8 @@ def analyze_video(job_id: int, video_id: int):
         video = conn.execute("SELECT url FROM videos WHERE id=?", (video_id,)).fetchone()
     if not video:
         raise RuntimeError("video not found")
+    if has_video_embedding(video_id):
+        return
     output_dir = config.DATA_DIR / "downloads" / str(video_id)
     output_dir.mkdir(parents=True, exist_ok=True)
     vtt_path = download_subtitles(video["url"], output_dir)
