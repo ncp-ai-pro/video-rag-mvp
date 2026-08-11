@@ -143,6 +143,25 @@ export async function streamChat(
   }
 }
 
+/** 답변 텍스트를 CLOVA Voice로 합성해 mp3 오디오로 받는다. */
+export async function synthesizeSpeech(text: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(`${CHAT_BASE}/tts`, {
+    method: "POST",
+    credentials: CHAT_CREDENTIALS,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+    signal,
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(
+      typeof body?.detail === "string" ? body.detail : "음성 생성에 실패했습니다.",
+      response.status,
+    );
+  }
+  return response.blob();
+}
+
 /** 스트리밍이 필요 없는 완료형 호출. */
 export async function askChat(
   query: string,
