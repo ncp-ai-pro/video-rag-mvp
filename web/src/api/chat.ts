@@ -145,7 +145,7 @@ export async function streamChat(
 
 /** 답변 텍스트를 CLOVA Voice로 합성해 mp3 오디오로 받는다. */
 export async function synthesizeSpeech(text: string, signal?: AbortSignal): Promise<Blob> {
-  const response = await fetch(`${CHAT_BASE}/tts`, {
+  const response = await fetch(`${CHAT_BASE}/chat/tts`, {
     method: "POST",
     credentials: CHAT_CREDENTIALS,
     headers: { "Content-Type": "application/json" },

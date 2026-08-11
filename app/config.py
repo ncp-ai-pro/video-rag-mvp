@@ -45,4 +45,8 @@ CHAT_PUBLIC_ORIGIN = os.getenv("CHAT_PUBLIC_ORIGIN", "").rstrip("/")
 
 CLOVA_VOICE_CLIENT_ID = os.getenv("CLOVA_VOICE_CLIENT_ID", "")
 CLOVA_VOICE_CLIENT_SECRET = os.getenv("CLOVA_VOICE_CLIENT_SECRET", "")
-CLOVA_VOICE_URL = os.getenv("CLOVA_VOICE_URL", "")
+CLOVA_VOICE_URL = os.getenv(
+    "CLOVA_VOICE_URL",
+    "https://naveropenapi.apigw.ntruss.com/tts-premium/v1/tts",
+)
+REDIS_TTS_CACHE_TTL_SECONDS = int(os.getenv("REDIS_TTS_CACHE_TTL_SECONDS", str(60 * 60 * 24)))
