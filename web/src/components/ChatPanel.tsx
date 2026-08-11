@@ -1,9 +1,10 @@
 import { useLayoutEffect, useRef } from "react";
-import { Play } from "lucide-react";
+import { Play, Volume2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useChat } from "@/hooks/chat/use-chat";
+import { useTts } from "@/hooks/chat/use-tts";
 import { formatTimestamp, playbackUrl, youtubeIdFromUrl } from "@/lib/format";
 import type { Evidence } from "@/api/types";
 
@@ -36,6 +37,7 @@ export function ChatPanel({ workspaceCode, videoId, videoTitle, onSeek, onError 
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const preserveScrollHeightRef = useRef<number | null>(null);
+  const tts = useTts(onError);
 
   // 새 내용이 생기면 맨 아래로. 이전 대화를 앞에 붙였을 때는 보던 위치가 그대로 보이도록 높이를 보정한다.
   useLayoutEffect(() => {
@@ -141,6 +143,33 @@ export function ChatPanel({ workspaceCode, videoId, videoTitle, onSeek, onError 
 
               {turn.status === "error" && (
                 <p className="text-xs text-destructive">답변 생성에 실패했습니다.</p>
+              )}
+
+              {turn.status === "done" && turn.answer.trim() && (
+                <div>
+                  {tts.turnId === turn.id && tts.audioUrl ? (
+                    <audio
+                      controls
+                      autoPlay
+                      src={tts.audioUrl}
+                      className="h-8 w-full"
+                      onPlay={(event) => {
+                        event.currentTarget.playbackRate = 1.5;
+                      }}
+                    />
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="xs"
+                      disabled={tts.loading}
+                      onClick={() => void tts.play(turn.id, turn.answer)}
+                    >
+                      <Volume2 />
+                      {tts.loading && tts.turnId === turn.id ? "생성 중…" : "답변 듣기"}
+                    </Button>
+                  )}
+                </div>
               )}
 
               {/* 근거 구간 */}
