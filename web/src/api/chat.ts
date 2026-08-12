@@ -1,6 +1,6 @@
 import { ApiError } from "./client";
 import { CHAT_BASE, CHAT_CREDENTIALS } from "@/lib/config";
-import type { ChatHistoryPage, ChatResponse, Evidence, EvidenceMode } from "./types";
+import type { ChatHistoryPage, ChatResponse, Evidence, EvidenceMode, TtsVoice } from "./types";
 
 /**
  * 작업공간의 저장된 대화 기록을 최신순 커서로 페이지네이션해서 불러온다.
@@ -144,12 +144,16 @@ export async function streamChat(
 }
 
 /** 답변 텍스트를 CLOVA Voice로 합성해 mp3 오디오로 받는다. */
-export async function synthesizeSpeech(text: string, signal?: AbortSignal): Promise<Blob> {
+export async function synthesizeSpeech(
+  text: string,
+  voice?: TtsVoice,
+  signal?: AbortSignal,
+): Promise<Blob> {
   const response = await fetch(`${CHAT_BASE}/chat/tts`, {
     method: "POST",
     credentials: CHAT_CREDENTIALS,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, speaker: voice ?? "nyounghwa" }),
     signal,
   });
   if (!response.ok) {

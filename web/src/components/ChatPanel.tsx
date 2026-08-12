@@ -221,36 +221,61 @@ export function ChatPanel({ workspaceCode, videoId, videoTitle, onSeek, onError 
 
       {/* 입력 */}
       <div className="border-t border-border/60 p-3">
-        <div className="mb-2 flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">근거</span>
-          <div className="inline-flex overflow-hidden rounded-full border border-border/70 bg-background">
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              className={`rounded-none px-3 ${evidenceMode === "simple" ? "bg-foreground text-background hover:bg-foreground/90 hover:text-background" : "text-muted-foreground"}`}
-              onClick={() => setEvidenceMode("simple")}
-            >
-              기본
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              className={`rounded-none px-3 ${evidenceMode === "precise" ? "bg-foreground text-background hover:bg-foreground/90 hover:text-background" : "text-muted-foreground"}`}
-              onClick={() => setEvidenceMode("precise")}
-            >
-              문장 강조
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              className={`rounded-none px-3 ${evidenceMode === "ultra" ? "bg-foreground text-background hover:bg-foreground/90 hover:text-background" : "text-muted-foreground"}`}
-              onClick={() => setEvidenceMode("ultra")}
-            >
-              의미 강조
-            </Button>
+        <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">근거</span>
+            <div className="inline-flex overflow-hidden rounded-full border border-border/70 bg-background">
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                className={`rounded-none px-3 ${evidenceMode === "simple" ? "bg-foreground text-background hover:bg-foreground/90 hover:text-background" : "text-muted-foreground"}`}
+                onClick={() => setEvidenceMode("simple")}
+              >
+                기본
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                className={`rounded-none px-3 ${evidenceMode === "precise" ? "bg-foreground text-background hover:bg-foreground/90 hover:text-background" : "text-muted-foreground"}`}
+                onClick={() => setEvidenceMode("precise")}
+              >
+                문장 강조
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                className={`rounded-none px-3 ${evidenceMode === "ultra" ? "bg-foreground text-background hover:bg-foreground/90 hover:text-background" : "text-muted-foreground"}`}
+                onClick={() => setEvidenceMode("ultra")}
+              >
+                의미 강조
+              </Button>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">음성</span>
+            <div className="inline-flex overflow-hidden rounded-full border border-border/70 bg-background">
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                className={`rounded-none px-3 ${tts.voice === "nyounghwa" ? "bg-foreground text-background hover:bg-foreground/90 hover:text-background" : "text-muted-foreground"}`}
+                onClick={() => tts.setVoice("nyounghwa")}
+              >
+                여성
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                className={`rounded-none px-3 ${tts.voice === "njihun" ? "bg-foreground text-background hover:bg-foreground/90 hover:text-background" : "text-muted-foreground"}`}
+                onClick={() => tts.setVoice("njihun")}
+              >
+                남성
+              </Button>
+            </div>
           </div>
         </div>
         <form onSubmit={submit} className="flex gap-2">
