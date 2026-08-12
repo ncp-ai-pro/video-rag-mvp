@@ -81,15 +81,15 @@ jobs:
         env:
           NCP_ACCESS_KEY: ${{ secrets.NCP_ACCESS_KEY }}
           NCP_SECRET_KEY: ${{ secrets.NCP_SECRET_KEY }}
-          NCP_SOURCEDEPLOY_PROJECT_ID: ${{ secrets.NCP_SOURCEDEPLOY_PROJECT_ID }}
-          NCP_SOURCEDEPLOY_STAGE_ID: ${{ secrets.NCP_SOURCEDEPLOY_STAGE_ID }}
-          NCP_SOURCEDEPLOY_WEB_SCENARIO_ID: ${{ secrets.NCP_SOURCEDEPLOY_WEB_SCENARIO_ID }}
+          WEB_SOURCEDEPLOY_PROJECT_ID: ${{ vars.WEB_SOURCEDEPLOY_PROJECT_ID }}
+          WEB_SOURCEDEPLOY_STAGE_ID: ${{ vars.WEB_SOURCEDEPLOY_STAGE_ID }}
+          WEB_SOURCEDEPLOY_SCENARIO_ID: ${{ vars.WEB_SOURCEDEPLOY_SCENARIO_ID }}
         run: |
           test -n "${NCP_ACCESS_KEY}"
           test -n "${NCP_SECRET_KEY}"
-          test -n "${NCP_SOURCEDEPLOY_PROJECT_ID}"
-          test -n "${NCP_SOURCEDEPLOY_STAGE_ID}"
-          test -n "${NCP_SOURCEDEPLOY_WEB_SCENARIO_ID}"
+          test -n "${WEB_SOURCEDEPLOY_PROJECT_ID}"
+          test -n "${WEB_SOURCEDEPLOY_STAGE_ID}"
+          test -n "${WEB_SOURCEDEPLOY_SCENARIO_ID}"
 
           python3 - <<'PY'
           import base64
@@ -103,9 +103,9 @@ jobs:
 
           method = "POST"
           origin = os.environ["NCP_SOURCEDEPLOY_API_ORIGIN"].rstrip("/")
-          project_id = os.environ["NCP_SOURCEDEPLOY_PROJECT_ID"]
-          stage_id = os.environ["NCP_SOURCEDEPLOY_STAGE_ID"]
-          scenario_id = os.environ["NCP_SOURCEDEPLOY_WEB_SCENARIO_ID"]
+          project_id = os.environ["WEB_SOURCEDEPLOY_PROJECT_ID"]
+          stage_id = os.environ["WEB_SOURCEDEPLOY_STAGE_ID"]
+          scenario_id = os.environ["WEB_SOURCEDEPLOY_SCENARIO_ID"]
           access_key = os.environ["NCP_ACCESS_KEY"]
           secret_key = os.environ["NCP_SECRET_KEY"]
 
@@ -147,7 +147,7 @@ jobs:
             echo ""
             echo "- Stable tag: \`${{ steps.tags.outputs.stable_tag }}\`"
             echo "- Trace tag: \`${{ steps.tags.outputs.version_tag }}\`"
-            echo "- SourceDeploy scenario id: \`${{ vars.NCP_SOURCEDEPLOY_WEB_SCENARIO_ID }}\`"
+            echo "- SourceDeploy scenario id: \`${{ vars.WEB_SOURCEDEPLOY_SCENARIO_ID }}\`"
             echo ""
             echo "This workflow does not update SourceDeploy Object Storage artifacts or \`web/.env\`."
             echo "SourceDeploy uses the artifact configured in the scenario."
