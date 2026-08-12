@@ -1,0 +1,217 @@
+name: CD App
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "tests/**"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - "Dockerfile"
+      - ".github/workflows/cd-app.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cd-app
+  cancel-in-progress: false
+
+env:
+  APP_IMAGE_NAME: kimgt2828/yt-rag-app
+  NCP_SOURCEDEPLOY_API_ORIGIN: https://vpcsourcedeploy.apigw.ntruss.com
+
+jobs:
+  deploy-app:
+    name: Build, publish, update manifest, and deploy app
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Check Python imports
+        run: python -m compileall -q app
+
+      - name: Run Python tests
+        run: python -m pytest -q
+
+      - name: Resolve image tags
+        id: tags
+        run: |
+          short_sha="${GITHUB_SHA::12}"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "version_tag=${APP_IMAGE_NAME}:${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "stable_tag=${APP_IMAGE_NAME}:prod" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push app image
+        run: |
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            -f Dockerfile \
+            -t "${{ steps.tags.outputs.stable_tag }}" \
+            -t "${{ steps.tags.outputs.version_tag }}" \
+            --push .
+
+      - name: Update SourceCommit manifests
+        env:
+          APP_SOURCECOMMIT_USERNAME: ${{ secrets.APP_SOURCECOMMIT_USERNAME }}
+          APP_SOURCECOMMIT_PASSWORD: ${{ secrets.APP_SOURCECOMMIT_PASSWORD }}
+          APP_SOURCECOMMIT_MANIFEST_REPO_URL: ${{ vars.APP_SOURCECOMMIT_MANIFEST_REPO_URL }}
+          APP_IMAGE_TAG: ${{ steps.tags.outputs.short_sha }}
+        run: |
+          test -n "${APP_SOURCECOMMIT_USERNAME}"
+          test -n "${APP_SOURCECOMMIT_PASSWORD}"
+          test -n "${APP_SOURCECOMMIT_MANIFEST_REPO_URL}"
+          test -n "${APP_IMAGE_TAG}"
+
+          auth_repo_url="$(python3 - <<'PY'
+          import os
+          from urllib.parse import quote, urlsplit, urlunsplit
+
+          repo_url = os.environ["APP_SOURCECOMMIT_MANIFEST_REPO_URL"]
+          username = quote(os.environ["APP_SOURCECOMMIT_USERNAME"], safe="")
+          password = quote(os.environ["APP_SOURCECOMMIT_PASSWORD"], safe="")
+          parsed = urlsplit(repo_url)
+          if parsed.scheme != "https":
+              raise SystemExit("APP_SOURCECOMMIT_MANIFEST_REPO_URL must use https")
+
+          netloc = f"{username}:{password}@{parsed.netloc}"
+          print(urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)))
+          PY
+          )"
+
+          git clone "${auth_repo_url}" manifest-repo
+          cd manifest-repo
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          image = f"kimgt2828/yt-rag-app:{os.environ['APP_IMAGE_TAG']}"
+          paths = [
+              Path("deploy/yt-rag-app/api-deployment.yml"),
+              Path("deploy/yt-rag-app/chat-deployment.yml"),
+              Path("deploy/yt-rag-app/worker-deployment.yml"),
+          ]
+          pattern = re.compile(r"^(\s*image:\s*)kimgt2828/yt-rag-app:[^\s]+\s*$", re.MULTILINE)
+
+          for path in paths:
+              text = path.read_text()
+              updated, count = pattern.subn(lambda match: f"{match.group(1)}{image}", text)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one image line in {path}, replaced {count}")
+              path.write_text(updated)
+          PY
+
+          git diff -- deploy/yt-rag-app/api-deployment.yml deploy/yt-rag-app/chat-deployment.yml deploy/yt-rag-app/worker-deployment.yml
+
+          if git diff --quiet; then
+            echo "Manifest image tag is already ${APP_IMAGE_TAG}; skipping SourceCommit push."
+          else
+            git add deploy/yt-rag-app/api-deployment.yml deploy/yt-rag-app/chat-deployment.yml deploy/yt-rag-app/worker-deployment.yml
+            git commit -m "Deploy yt-rag-app ${APP_IMAGE_TAG}"
+            git push origin HEAD:main
+          fi
+
+      - name: Trigger NCP SourceDeploy app scenario
+        env:
+          NCP_ACCESS_KEY: ${{ secrets.NCP_ACCESS_KEY }}
+          NCP_SECRET_KEY: ${{ secrets.NCP_SECRET_KEY }}
+          APP_SOURCEDEPLOY_PROJECT_ID: ${{ vars.APP_SOURCEDEPLOY_PROJECT_ID }}
+          APP_SOURCEDEPLOY_STAGE_ID: ${{ vars.APP_SOURCEDEPLOY_STAGE_ID }}
+          APP_SOURCEDEPLOY_SCENARIO_ID: ${{ vars.APP_SOURCEDEPLOY_SCENARIO_ID }}
+        run: |
+          test -n "${NCP_ACCESS_KEY}"
+          test -n "${NCP_SECRET_KEY}"
+          test -n "${APP_SOURCEDEPLOY_PROJECT_ID}"
+          test -n "${APP_SOURCEDEPLOY_STAGE_ID}"
+          test -n "${APP_SOURCEDEPLOY_SCENARIO_ID}"
+
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import hmac
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          method = "POST"
+          origin = os.environ["NCP_SOURCEDEPLOY_API_ORIGIN"].rstrip("/")
+          project_id = os.environ["APP_SOURCEDEPLOY_PROJECT_ID"]
+          stage_id = os.environ["APP_SOURCEDEPLOY_STAGE_ID"]
+          scenario_id = os.environ["APP_SOURCEDEPLOY_SCENARIO_ID"]
+          access_key = os.environ["NCP_ACCESS_KEY"]
+          secret_key = os.environ["NCP_SECRET_KEY"]
+
+          uri = f"/api/v1/project/{project_id}/stage/{stage_id}/scenario/{scenario_id}/deploy"
+          timestamp = str(int(time.time() * 1000))
+          message = f"{method} {uri}\n{timestamp}\n{access_key}"
+          signature = base64.b64encode(
+              hmac.new(secret_key.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).digest()
+          ).decode("utf-8")
+
+          request = urllib.request.Request(
+              f"{origin}{uri}",
+              data=b"",
+              method=method,
+              headers={
+                  "Content-Type": "application/json",
+                  "x-ncp-apigw-timestamp": timestamp,
+                  "x-ncp-iam-access-key": access_key,
+                  "x-ncp-apigw-signature-v2": signature,
+              },
+          )
+
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  body = response.read().decode("utf-8")
+                  print(f"SourceDeploy status: {response.status}")
+                  print(body)
+          except urllib.error.HTTPError as error:
+              body = error.read().decode("utf-8", "replace")
+              print(f"SourceDeploy failed: HTTP {error.code}", file=sys.stderr)
+              print(body, file=sys.stderr)
+              raise
+          PY
+
+      - name: Deployment summary
+        run: |
+          {
+            echo "### App deployment triggered"
+            echo ""
+            echo "- Stable tag: \`${{ steps.tags.outputs.stable_tag }}\`"
+            echo "- Trace tag: \`${{ steps.tags.outputs.version_tag }}\`"
+            echo "- SourceDeploy scenario id: \`${{ vars.APP_SOURCEDEPLOY_SCENARIO_ID }}\`"
+            echo "- Manifest repo: \`${{ vars.APP_SOURCECOMMIT_MANIFEST_REPO_URL }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
