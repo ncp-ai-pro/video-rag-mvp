@@ -124,6 +124,9 @@ export interface Evidence {
 
 export type EvidenceMode = "simple" | "precise" | "ultra";
 
+/** CLOVA Voice 스피커 ID. nyounghwa=여성, njihun=남성 */
+export type TtsVoice = "nyounghwa" | "njihun";
+
 export interface ChatResponse {
   answer: string;
   evidence: Evidence[];
