@@ -96,6 +96,18 @@ def extract_youtube_urls(text: str) -> list[VideoIdentity]:
     return identities
 
 
+def extract_youtube_url_mentions(text: str) -> list[VideoIdentity]:
+    """Extract every YouTube video mention, preserving duplicates and order."""
+    if not isinstance(text, str):
+        return []
+    identities: list[VideoIdentity] = []
+    for match in _URL_RE.finditer(text):
+        identity = youtube_video_identity(match.group(0))
+        if identity:
+            identities.append(identity)
+    return identities
+
+
 # Short names keep call sites readable and make the module convenient to adopt.
 parse_youtube_url = youtube_video_identity
 normalize_youtube_url = youtube_video_identity

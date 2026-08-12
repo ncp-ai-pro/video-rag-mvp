@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from . import chat_cache, config
+from . import analysis_queue, chat_cache, config
 from .db import connection, is_postgres
 
 
@@ -81,6 +81,17 @@ def upload_artifact_json(payload: Dict, object_key: str) -> str:
         Key=object_key,
         Body=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
         ContentType="application/json; charset=utf-8",
+    )
+    return object_key
+
+
+def upload_artifact_bytes(payload: bytes, object_key: str, content_type: str) -> str:
+    """Stores bytes in Object Storage; callers keep DB rows as the durable index."""
+    _object_storage_client().put_object(
+        Bucket=config.NCP_OBJECT_STORAGE_BUCKET,
+        Key=object_key,
+        Body=payload,
+        ContentType=content_type,
     )
     return object_key
 
@@ -258,22 +269,151 @@ def cosine(left: List[float], right: List[float]) -> float:
     return sum(a * b for a, b in zip(left, right))
 
 
-def enqueue(kind: str, resource_id: int) -> int:
+def _insert_outbox_event(conn, job_id: int, kind: str, priority: str, idempotency_key: Optional[str]) -> None:
+    conn.execute(
+        """
+        INSERT INTO outbox_events(event_type, aggregate_type, aggregate_id, payload_json, updated_at)
+        VALUES ('analysis_job_queued', 'job', ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        """,
+        (
+            job_id,
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "kind": kind,
+                    "priority": priority,
+                    "idempotency_key": idempotency_key or f"{kind}:{job_id}",
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        ),
+    )
+
+
+def publish_job_signal(job_id: int, kind: str, priority: str, idempotency_key: Optional[str]) -> bool:
+    """Wake RabbitMQ consumers when enabled; DB remains the durable queue."""
+    try:
+        return analysis_queue.publish_analysis_job(
+            job_id=job_id,
+            kind=kind,
+            priority=priority,
+            idempotency_key=idempotency_key or f"{kind}:{job_id}",
+        )
+    except Exception as exc:
+        with connection() as conn:
+            conn.execute(
+                """
+                UPDATE outbox_events
+                SET attempts=attempts+1, last_error=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE aggregate_type='job' AND aggregate_id=? AND status='pending'
+                """,
+                (str(exc)[:1000], job_id),
+            )
+        return False
+
+
+def publish_pending_outbox(limit: int = 100) -> Dict:
+    """Publishes pending job events again; useful after RabbitMQ downtime."""
+    published = 0
+    failed = 0
     with connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, aggregate_id, payload_json
+            FROM outbox_events
+            WHERE status='pending' AND event_type='analysis_job_queued'
+            ORDER BY id
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    for row in rows:
+        payload = json.loads(row["payload_json"])
+        try:
+            if analysis_queue.publish_analysis_job(
+                int(payload["job_id"]),
+                payload["kind"],
+                payload.get("priority") or "normal",
+                payload.get("idempotency_key") or f"job:{payload['job_id']}",
+            ):
+                with connection() as conn:
+                    conn.execute(
+                        """
+                        UPDATE outbox_events
+                        SET status='published', published_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                            updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                        WHERE id=?
+                        """,
+                        (row["id"],),
+                    )
+                published += 1
+        except Exception as exc:
+            with connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE outbox_events
+                    SET attempts=attempts+1, last_error=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    WHERE id=?
+                    """,
+                    (str(exc)[:1000], row["id"]),
+                )
+            failed += 1
+    return {"published": published, "failed": failed}
+
+
+def enqueue(kind: str, resource_id: int, *, priority: str = "normal", idempotency_key: Optional[str] = None) -> int:
+    db_priority = analysis_queue.priority_values(priority)["database"]
+    with connection() as conn:
+        if idempotency_key:
+            existing = conn.execute(
+                """
+                SELECT id FROM jobs
+                WHERE idempotency_key=? AND status IN ('queued', 'running')
+                ORDER BY id DESC LIMIT 1
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if existing:
+                return existing["id"]
         row = conn.execute(
             """
-            INSERT INTO jobs(kind, resource_id, progress_stage, progress_message, updated_at)
-            VALUES (?, ?, 'queued', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            INSERT INTO jobs(kind, resource_id, priority, idempotency_key, progress_stage, progress_message, updated_at)
+            VALUES (?, ?, ?, ?, 'queued', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             RETURNING id
             """,
-            (kind, resource_id, ANALYSIS_MESSAGES["queued"]),
+            (kind, resource_id, db_priority, idempotency_key, ANALYSIS_MESSAGES["queued"]),
         ).fetchone()
-        return row["id"]
+        job_id = row["id"]
+        _insert_outbox_event(conn, job_id, kind, priority, idempotency_key)
+    publish_job_signal(job_id, kind, priority, idempotency_key)
+    return job_id
 
 
-def enqueue_analysis(video_id: int) -> int:
+def enqueue_analysis(video_id: int, *, priority: str = "manual", idempotency_key: Optional[str] = None) -> int:
     """Creates the queued job and the video-visible progress in one DB transaction."""
+    db_priority = analysis_queue.priority_values(priority)["database"]
     with connection() as conn:
+        if idempotency_key:
+            existing = conn.execute(
+                """
+                SELECT id FROM jobs
+                WHERE idempotency_key=? AND status IN ('queued', 'running')
+                ORDER BY id DESC LIMIT 1
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE videos
+                    SET analysis_status='queued', analysis_stage='queued', analysis_message=?,
+                        analysis_error=NULL, analysis_updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    WHERE id=?
+                    """,
+                    (ANALYSIS_MESSAGES["queued"], video_id),
+                )
+                return existing["id"]
         conn.execute(
             """
             UPDATE videos
@@ -285,13 +425,24 @@ def enqueue_analysis(video_id: int) -> int:
         )
         row = conn.execute(
             """
-            INSERT INTO jobs(kind, resource_id, status, progress_stage, progress_message, updated_at)
-            VALUES ('analyze_video', ?, 'queued', 'queued', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            INSERT INTO jobs(kind, resource_id, status, priority, idempotency_key, progress_stage, progress_message, updated_at)
+            VALUES ('analyze_video', ?, 'queued', ?, ?, 'queued', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             RETURNING id
             """,
-            (video_id, ANALYSIS_MESSAGES["queued"]),
+            (video_id, db_priority, idempotency_key, ANALYSIS_MESSAGES["queued"]),
         ).fetchone()
-        return row["id"]
+        job_id = row["id"]
+        _insert_outbox_event(conn, job_id, "analyze_video", priority, idempotency_key)
+        conn.execute(
+            """
+            UPDATE video_analysis_index
+            SET analysis_status='queued', last_job_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE representative_video_id=?
+            """,
+            (job_id, video_id),
+        )
+    publish_job_signal(job_id, "analyze_video", priority, idempotency_key)
+    return job_id
 
 
 def update_analysis_progress(job_id: int, video_id: int, stage: str, message: Optional[str] = None):
@@ -362,6 +513,14 @@ def finish_analysis(job_id: int, video_id: int, error: Optional[str] = None):
             """,
             (status, stage, message, message if failed else None, status, video_id),
         )
+        conn.execute(
+            """
+            UPDATE video_analysis_index
+            SET analysis_status=?, last_job_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE representative_video_id=?
+            """,
+            (status, job_id, video_id),
+        )
 
 
 def analysis_event_state(video_id: int, user_id: int) -> Optional[Dict]:
@@ -418,7 +577,7 @@ def video_belongs_to_workspace(user_id: int, video_id: int) -> bool:
     return row is not None
 
 
-def upsert_video(channel_id: int, raw: Dict) -> int:
+def upsert_video(channel_id: int, raw: Dict, *, embed_metadata: bool = True) -> int:
     video = {
         "platform_video_id": raw["platform_video_id"],
         "title": raw["title"],
@@ -428,7 +587,7 @@ def upsert_video(channel_id: int, raw: Dict) -> int:
         "duration_seconds": raw.get("duration_seconds"),
         "uploaded_at": raw.get("uploaded_at"),
     }
-    vector = json.dumps(embedding(metadata_text(video)))
+    vector = json.dumps(embedding(metadata_text(video))) if embed_metadata else None
     with connection() as conn:
         row = conn.execute(
             """

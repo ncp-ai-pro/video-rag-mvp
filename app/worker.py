@@ -1,5 +1,6 @@
 """Run this separately from FastAPI: python -m app.worker."""
 import json
+import os
 import re
 import subprocess
 import time
@@ -7,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import config
+from .analysis_queue import QUEUE_ARGUMENTS, QUEUE_NAME
 from .db import connection, initialize, is_postgres
 from .services import (
     ANALYSIS_MESSAGES,
@@ -87,44 +89,67 @@ def download_subtitles(video_url: str, output_dir: Path) -> Optional[Path]:
     return None
 
 
+def _mark_job_running(conn, row):
+    worker_id = f"{os.uname().nodename}:{os.getpid()}"
+    if row["kind"] == "analyze_video":
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status='running', progress_stage='downloading_caption', progress_message=?,
+                attempts=attempts+1, started_at=CURRENT_TIMESTAMP, locked_at=CURRENT_TIMESTAMP,
+                locked_by=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id=?
+            """,
+            (ANALYSIS_MESSAGES["downloading_caption"], worker_id, row["id"]),
+        )
+        conn.execute(
+            """
+            UPDATE videos
+            SET analysis_status='running', analysis_stage='downloading_caption', analysis_message=?,
+                analysis_error=NULL, analysis_updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id=?
+            """,
+            (ANALYSIS_MESSAGES["downloading_caption"], row["resource_id"]),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status='running', attempts=attempts+1, started_at=CURRENT_TIMESTAMP,
+                locked_at=CURRENT_TIMESTAMP, locked_by=?,
+                updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id=?
+            """,
+            (worker_id, row["id"]),
+        )
+
+
 def claim_job():
     with connection() as conn:
-        query = "SELECT * FROM jobs WHERE status='queued' ORDER BY id LIMIT 1"
+        query = """
+            SELECT * FROM jobs
+            WHERE status='queued' AND (next_run_at IS NULL OR next_run_at <= CURRENT_TIMESTAMP)
+            ORDER BY priority ASC, id ASC
+            LIMIT 1
+        """
         if is_postgres():
             query += " FOR UPDATE SKIP LOCKED"
         row = conn.execute(query).fetchone()
         if not row:
             return None
-        if row["kind"] == "analyze_video":
-            conn.execute(
-                """
-                UPDATE jobs
-                SET status='running', progress_stage='downloading_caption', progress_message=?,
-                    attempts=attempts+1, started_at=CURRENT_TIMESTAMP,
-                    updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                WHERE id=?
-                """,
-                (ANALYSIS_MESSAGES["downloading_caption"], row["id"]),
-            )
-            conn.execute(
-                """
-                UPDATE videos
-                SET analysis_status='running', analysis_stage='downloading_caption', analysis_message=?,
-                    analysis_error=NULL, analysis_updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                WHERE id=?
-                """,
-                (ANALYSIS_MESSAGES["downloading_caption"], row["resource_id"]),
-            )
-        else:
-            conn.execute(
-                """
-                UPDATE jobs
-                SET status='running', attempts=attempts+1, started_at=CURRENT_TIMESTAMP,
-                    updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                WHERE id=?
-                """,
-                (row["id"],),
-            )
+        _mark_job_running(conn, row)
+        return dict(conn.execute("SELECT * FROM jobs WHERE id=?", (row["id"],)).fetchone())
+
+
+def claim_job_by_id(job_id: int):
+    with connection() as conn:
+        query = "SELECT * FROM jobs WHERE id=? AND status='queued'"
+        if is_postgres():
+            query += " FOR UPDATE SKIP LOCKED"
+        row = conn.execute(query, (job_id,)).fetchone()
+        if not row:
+            return None
+        _mark_job_running(conn, row)
         return dict(conn.execute("SELECT * FROM jobs WHERE id=?", (row["id"],)).fetchone())
 
 
@@ -452,8 +477,54 @@ def run_once():
     return True
 
 
+def _run_claimed_job(job) -> bool:
+    try:
+        if job["kind"] == "scan_channel":
+            scan_channel(job["resource_id"])
+            finish_scan(job["id"])
+        else:
+            analyze_video(job["id"], job["resource_id"])
+            finish_analysis(job["id"], job["resource_id"])
+    except Exception as exc:
+        if job["kind"] == "analyze_video":
+            finish_analysis(job["id"], job["resource_id"], str(exc))
+        else:
+            finish_scan(job["id"], str(exc))
+    return True
+
+
+def consume_rabbitmq():
+    try:
+        import pika
+    except ImportError as exc:
+        raise RuntimeError("pika is required when WORKER_QUEUE_MODE=rabbitmq") from exc
+    if not config.RABBITMQ_URL:
+        raise RuntimeError("RABBITMQ_URL is required when WORKER_QUEUE_MODE=rabbitmq")
+
+    connection_params = pika.URLParameters(config.RABBITMQ_URL)
+    rabbit = pika.BlockingConnection(connection_params)
+    channel = rabbit.channel()
+    channel.queue_declare(queue=QUEUE_NAME, durable=True, arguments=QUEUE_ARGUMENTS)
+    channel.basic_qos(prefetch_count=config.WORKER_PREFETCH_COUNT)
+
+    def on_message(ch, method, properties, body):
+        try:
+            payload = json.loads(body.decode("utf-8"))
+            job = claim_job_by_id(int(payload["job_id"]))
+            if job:
+                _run_claimed_job(job)
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+        except Exception:
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+
+    channel.basic_consume(queue=QUEUE_NAME, on_message_callback=on_message)
+    channel.start_consuming()
+
+
 if __name__ == "__main__":
     initialize()
+    if config.WORKER_QUEUE_MODE == "rabbitmq":
+        consume_rabbitmq()
     while True:
         if not run_once():
             time.sleep(2)

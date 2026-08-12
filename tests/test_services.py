@@ -813,6 +813,58 @@ def test_worker_falls_back_only_when_yt_dlp_reports_no_subtitles(monkeypatch):
         assert worker.download_subtitles("https://www.youtube.com/watch?v=no-captions", output_dir) is None
 
 
+def test_worker_claims_higher_priority_job_first(monkeypatch):
+    with tempfile.TemporaryDirectory() as directory:
+        monkeypatch.setenv("DATABASE_PATH", os.path.join(directory, "priority.db"))
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setenv("EMBEDDING_PROVIDER", "mock")
+        monkeypatch.setenv("CHAT_PROVIDER", "mock")
+
+        from app import config, db, services, worker, workspaces
+
+        importlib.reload(config)
+        importlib.reload(db)
+        importlib.reload(services)
+        importlib.reload(workspaces)
+        importlib.reload(worker)
+        db.initialize()
+        workspace = workspaces.create_guest_workspace()
+        with db.connection() as conn:
+            channel_id = conn.execute(
+                "INSERT INTO channels(user_id, url, name) VALUES (?, ?, ?) RETURNING id",
+                (workspace["id"], "https://www.youtube.com/@priority", "priority"),
+            ).fetchone()["id"]
+        low_video_id = services.upsert_video(
+            channel_id,
+            {
+                "platform_video_id": "bulk",
+                "title": "bulk",
+                "description": "",
+                "url": "https://www.youtube.com/watch?v=bulk",
+            },
+            embed_metadata=False,
+        )
+        high_video_id = services.upsert_video(
+            channel_id,
+            {
+                "platform_video_id": "ultra",
+                "title": "ultra",
+                "description": "",
+                "url": "https://www.youtube.com/watch?v=ultra",
+            },
+            embed_metadata=False,
+        )
+
+        bulk_job_id = services.enqueue_analysis(low_video_id, priority="bulk")
+        ultra_job_id = services.enqueue_analysis(high_video_id, priority="ultra")
+
+        claimed = worker.claim_job()
+
+        assert claimed["id"] == ultra_job_id
+        assert claimed["id"] != bulk_job_id
+        assert claimed["priority"] == 0
+
+
 def test_worker_reports_youtube_extraction_failure_instead_of_starting_stt(monkeypatch):
     from app import worker
 

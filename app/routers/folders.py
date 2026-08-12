@@ -1,11 +1,12 @@
 import json
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from ..dependencies import current_workspace
 from ..db import is_unique_violation
+from ..redis_guard import acquire_import_lock, import_rate_limited
 from ..folders import (
     add_video_url_to_folder,
     analyze_candidate,
@@ -14,6 +15,7 @@ from ..folders import (
     create_channel_source,
     create_folder,
     delete_folder,
+    import_kakao_links_to_folder,
     list_channel_sources,
     list_folder_candidates,
     list_folder_videos,
@@ -120,6 +122,41 @@ def folder_video_create(folder_id: int, payload: FolderVideoCreate, workspace: D
             str(payload.url),
             analyze=payload.analyze,
             title=payload.title,
+        )
+    except LookupError as exc:
+        _not_found(exc)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/{folder_id}/imports/kakao", status_code=status.HTTP_202_ACCEPTED)
+async def folder_kakao_import(
+    folder_id: int,
+    file: UploadFile = File(...),
+    analyze: bool = Form(default=False),
+    priority: str = Form(default="bulk"),
+    workspace: Dict = Depends(current_workspace),
+):
+    if priority not in {"bulk", "normal", "manual", "ultra"}:
+        raise HTTPException(status_code=422, detail="priority must be one of bulk, normal, manual, ultra")
+    if not file.filename:
+        raise HTTPException(status_code=422, detail="filename is required")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=422, detail="file is empty")
+    if import_rate_limited(workspace["id"]):
+        raise HTTPException(status_code=429, detail="too many import requests")
+    import_lock = acquire_import_lock(workspace["id"], folder_id, content)
+    if import_lock == "":
+        raise HTTPException(status_code=409, detail="same Kakao export is already being imported")
+    try:
+        return import_kakao_links_to_folder(
+            workspace["id"],
+            folder_id,
+            filename=file.filename,
+            content=content,
+            analyze=analyze,
+            priority=priority,
         )
     except LookupError as exc:
         _not_found(exc)
