@@ -1065,6 +1065,181 @@ def answer(question: str, evidence: List[Dict], history: Optional[List[Dict[str,
     response.raise_for_status()
     return response.json()["result"]["message"]["content"]
 
+def _summary_payload(qa_text: str) -> Dict:
+    return {
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "아래 질문과 답변들을 종합해서 핵심 내용을 3~5문장으로 자연스럽게 요약하세요. "
+                    "목록이 아니라 하나의 문단으로 작성하세요."
+                ),
+            },
+            {"role": "user", "content": qa_text},
+        ],
+        "maxTokens": 400,
+        "temperature": 0.3,
+        "topP": 0.8,
+        "topK": 0,
+        "repetitionPenalty": 1.1,
+    }
+
+
+def summarize_chat_transcript(qa_pairs: List[Dict]) -> str:
+    if not qa_pairs:
+        return "요약할 대화 내용이 없습니다."
+    qa_text = "\n\n".join(f"질문: {pair['question']}\n답변: {pair['answer']}" for pair in qa_pairs)
+    if config.CHAT_PROVIDER == "mock":
+        return "로컬 테스트 모드 요약본입니다. 실제 CLOVA 연결 시 대화 내용을 종합한 요약이 표시됩니다."
+    if config.CHAT_PROVIDER != "clova":
+        raise RuntimeError("CHAT_PROVIDER must be mock or clova")
+    if not config.CLOVASTUDIO_API_KEY:
+        raise RuntimeError("CLOVASTUDIO_API_KEY is required for CHAT_PROVIDER=clova")
+    response = httpx.post(
+        "https://clovastudio.stream.ntruss.com/v3/chat-completions/" + config.CLOVA_MODEL,
+        headers=_chat_headers(),
+        json=_summary_payload(qa_text),
+        timeout=90,
+    )
+    response.raise_for_status()
+    return response.json()["result"]["message"]["content"]
+
+
+def _export_data(
+    user_id: int, video_id: Optional[int], message_ids: Optional[List[int]]
+) -> "tuple[str, List[Dict]]":
+    """Returns (title, qa_pairs) scoped to one video (or the whole workspace) and
+    filtered to the selected question turns when message_ids is given."""
+    if video_id is not None:
+        with connection() as conn:
+            video_row = conn.execute("SELECT title FROM videos WHERE id=?", (video_id,)).fetchone()
+        title = video_row["title"] if video_row else "선택한 영상"
+        scope_sql = "video_id=?"
+        scope_params: tuple = (video_id,)
+    else:
+        title = "전체 대화"
+        scope_sql = "1=1"
+        scope_params = ()
+
+    with connection() as conn:
+        rows = conn.execute(
+            f"SELECT id, role, content FROM chat_messages WHERE user_id=? AND {scope_sql} ORDER BY id ASC",
+            (user_id, *scope_params),
+        ).fetchall()
+
+    wanted_ids = set(message_ids) if message_ids else None
+    qa_pairs: List[Dict] = []
+    pending_question: Optional[str] = None
+    pending_question_id: Optional[int] = None
+    for row in rows:
+        if row["role"] == "user":
+            pending_question = row["content"]
+            pending_question_id = row["id"]
+        elif pending_question is not None:
+            if wanted_ids is None or pending_question_id in wanted_ids:
+                qa_pairs.append({"question": pending_question, "answer": row["content"]})
+            pending_question = None
+            pending_question_id = None
+    return title, qa_pairs
+
+
+def export_chat_transcript_txt(
+    user_id: int, video_id: Optional[int] = None, message_ids: Optional[List[int]] = None
+) -> str:
+    title, qa_pairs = _export_data(user_id, video_id, message_ids)
+    divider = "-" * 20
+    lines = [title, "", divider, "", summarize_chat_transcript(qa_pairs), "", divider, ""]
+    for index, pair in enumerate(qa_pairs, start=1):
+        lines.append(f"질문 {index}. {pair['question']}")
+        lines.append(f"답변 {index}. {pair['answer']}")
+        if index != len(qa_pairs):
+            lines.append("")
+            lines.append(divider)
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+_PDF_FONT_NAME: Optional[str] = None
+
+
+def _pdf_font_path() -> str:
+    candidates = [
+        config.PDF_FONT_PATH,
+        r"C:\Windows\Fonts\malgun.ttf",
+        "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansKR-Regular.otf",
+    ]
+    for path in candidates:
+        if path and Path(path).exists():
+            return path
+    raise RuntimeError(
+        "PDF에 사용할 한글 폰트를 찾을 수 없습니다. PDF_FONT_PATH 환경변수에 TTF 폰트 경로를 설정하세요."
+    )
+
+
+def _ensure_pdf_font() -> str:
+    global _PDF_FONT_NAME
+    if _PDF_FONT_NAME is None:
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+
+        pdfmetrics.registerFont(TTFont("ExportKorean", _pdf_font_path()))
+        _PDF_FONT_NAME = "ExportKorean"
+    return _PDF_FONT_NAME
+
+
+def _pdf_escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br/>")
+
+
+def export_chat_transcript_pdf(
+    user_id: int, video_id: Optional[int] = None, message_ids: Optional[List[int]] = None
+) -> bytes:
+    import io
+
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer
+
+    title, qa_pairs = _export_data(user_id, video_id, message_ids)
+    summary = summarize_chat_transcript(qa_pairs)
+    font_name = _ensure_pdf_font()
+
+    title_style = ParagraphStyle("Title", fontName=font_name, fontSize=18, leading=24, alignment=TA_LEFT)
+    body_style = ParagraphStyle("Body", fontName=font_name, fontSize=11, leading=17)
+    question_style = ParagraphStyle("Question", fontName=font_name, fontSize=11, leading=17, spaceBefore=10)
+    answer_style = ParagraphStyle("Answer", fontName=font_name, fontSize=11, leading=17, spaceAfter=4)
+
+    story = [
+        Paragraph(_pdf_escape(title), title_style),
+        HRFlowable(width="100%", thickness=1, color="#333333", spaceBefore=4, spaceAfter=10),
+        Paragraph(_pdf_escape(summary), body_style),
+        Spacer(1, 8 * mm),
+        HRFlowable(width="100%", thickness=1, color="#333333", spaceBefore=4, spaceAfter=10),
+    ]
+    if not qa_pairs:
+        story.append(Paragraph("내보낼 대화 내용이 없습니다.", body_style))
+    for index, pair in enumerate(qa_pairs, start=1):
+        story.append(Paragraph(f"질문 {index}. " + _pdf_escape(pair["question"]), question_style))
+        story.append(Paragraph(f"답변 {index}. " + _pdf_escape(pair["answer"]), answer_style))
+        if index != len(qa_pairs):
+            story.append(HRFlowable(width="100%", thickness=0.5, color="#999999", spaceBefore=6, spaceAfter=6))
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        topMargin=20 * mm,
+        bottomMargin=20 * mm,
+        leftMargin=20 * mm,
+        rightMargin=20 * mm,
+    )
+    doc.build(story)
+    return buffer.getvalue()
+
 def _common_prefix_length(a: str, b: str) -> int:
     length = min(len(a), len(b))
     for i in range(length):

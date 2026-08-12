@@ -6,3 +6,4 @@ yt-dlp==2026.07.04
 psycopg[binary]==3.2.9
 boto3==1.35.99
 redis==5.2.1
+reportlab==5.0.0
