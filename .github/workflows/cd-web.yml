@@ -8,6 +8,7 @@ on:
       - "web/**"
       - "Dockerfile.web"
       - "deploy/nginx/**"
+      - "compose.web.yml"
       - ".github/workflows/cd-web.yml"
 
 permissions:
@@ -25,7 +26,7 @@ jobs:
   deploy-web:
     name: Build, push, and trigger web deploy
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Check out source
         uses: actions/checkout@v4

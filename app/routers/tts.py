@@ -1,12 +1,14 @@
 import httpx
 import re
+import time #병렬구조 시간측정
+import asyncio #병렬
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
+from .. import tts_cache
 from ..config import CLOVA_VOICE_CLIENT_ID, CLOVA_VOICE_CLIENT_SECRET, CLOVA_VOICE_URL
 from ..schemas import TTSRequest
-
 
 router = APIRouter()
 
@@ -31,34 +33,48 @@ def clean_for_tts(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-@router.post("/tts")
+@router.post("/chat/tts")
 async def create_speech(payload: TTSRequest):
     if not CLOVA_VOICE_CLIENT_ID or not CLOVA_VOICE_CLIENT_SECRET:
         raise HTTPException(status_code=503, detail="CLOVA Voice가 설정되어 있지 않습니다.")
+
+    cached = tts_cache.get_audio(payload.text, payload.speaker)
+    if cached is not None:
+        print("[TTS] cache HIT")
+        return Response(content=cached, media_type="audio/mpeg")
+    print("[TTS] cache MISS, calling CLOVA Voice")
 
     headers = {
         "X-NCP-APIGW-API-KEY-ID": CLOVA_VOICE_CLIENT_ID,
         "X-NCP-APIGW-API-KEY": CLOVA_VOICE_CLIENT_SECRET,
     }
     chunks = split_text(clean_for_tts(payload.text))
-    print(f"[TTS] {len(chunks)} chunks: {[len(c) for c in chunks]}")
     audio = bytearray()
 
+    start = time.perf_counter()
+
     async with httpx.AsyncClient(timeout=60.0) as client:
-        for i, chunk in enumerate(chunks, start=1):
+        async def fetch(chunk: str) -> bytes:
             response = await client.post(
                 CLOVA_VOICE_URL,
                 headers=headers,
-                data={"speaker": payload.speaker, "text": chunk, "format": "mp3", "speed": "0"},
+                data={
+                    "speaker": payload.speaker,
+                    "text": chunk,
+                    "format": "mp3",
+                    "speed": "0",
+                },
             )
             if response.status_code != 200:
                 raise HTTPException(
                     status_code=response.status_code,
                     detail=f"CLOVA Voice error: {response.text}",
                 )
-            with open(f"chunk_{i}.mp3", "wb") as f:      # 디버깅용, 확인 끝나면 삭제
-                f.write(response.content)
-            print(f"[TTS] chunk {i}: {chunk!r}")   # 디버깅용, 확인 끝나면 삭제
-            audio.extend(response.content)
+            return response.content
 
-    return Response(content=bytes(audio), media_type="audio/mpeg")
+        parts = await asyncio.gather(*(fetch(c) for c in chunks))
+
+    end = time.perf_counter()
+    print(f"[TTS] parallel: {end - start:.2f}s")
+
+    return Response(content=b"".join(parts), media_type="audio/mpeg")

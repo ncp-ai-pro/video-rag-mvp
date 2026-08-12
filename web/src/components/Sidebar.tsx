@@ -6,57 +6,56 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api } from '@/lib/api'
+import { useChannels } from '@/hooks/queries/channel/use-channels'
+import { useVideos } from '@/hooks/queries/video/use-videos'
+import { useAddChannel } from '@/hooks/mutations/channel/use-add-channel'
+import { useScanChannel } from '@/hooks/mutations/channel/use-scan-channel'
+import { useRecommend } from '@/hooks/mutations/recommendation/use-recommend'
 import { formatUploadDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { Channel, Recommendation, Video } from '@/lib/types'
+import type { Recommendation, Video } from '@/api/types'
 
 interface Props {
-  channels: Channel[]
   selectedChannelId: number | null
   onSelectChannel: (channelId: number) => void
-  onAddChannel: (url: string) => Promise<void>
-  onScan: () => Promise<void>
-  videos: Video[]
-  videosLoading: boolean
   selectedVideoId: number | null
   onSelectVideo: (video: Video) => void
   onError: (message: string) => void
 }
 
 export function Sidebar({
-  channels,
   selectedChannelId,
   onSelectChannel,
-  onAddChannel,
-  onScan,
-  videos,
-  videosLoading,
   selectedVideoId,
   onSelectVideo,
   onError,
 }: Props) {
+  const { data: channels = [] } = useChannels()
+  const { data: videos = [], isLoading: videosLoading } = useVideos(selectedChannelId)
+
+  const addChannelMutation = useAddChannel({
+    onError: () => onError('채널 등록에 실패했습니다.'),
+    onSettled: (channel) => onSelectChannel(channel.id),
+  })
+  const scanChannelMutation = useScanChannel({
+    onError: () => onError('탐색 작업 등록에 실패했습니다.'),
+  })
+  const recommendMutation = useRecommend({
+    onError: () => onError('추천 검색에 실패했습니다.'),
+  })
+
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<Recommendation[] | null>(null)
-  const [searching, setSearching] = useState(false)
-
   const [addUrl, setAddUrl] = useState('')
   const [addOpen, setAddOpen] = useState(false)
-  const [adding, setAdding] = useState(false)
-  const [scanning, setScanning] = useState(false)
 
-  const search = async (event: React.FormEvent) => {
+  const search = (event: React.FormEvent) => {
     event.preventDefault()
     if (!query.trim()) return
-    setSearching(true)
-    try {
-      const result = await api.recommend(query.trim())
-      setResults(result.items)
-    } catch (error) {
-      onError(error instanceof Error ? error.message : '추천 검색에 실패했습니다.')
-    } finally {
-      setSearching(false)
-    }
+    recommendMutation.mutate(
+      { query: query.trim() },
+      { onSuccess: (result) => setResults(result.items) },
+    )
   }
 
   const clearSearch = () => {
@@ -75,32 +74,32 @@ export function Sidebar({
     }
   }
 
-  const addChannel = async (event: React.FormEvent) => {
+  const addChannel = (event: React.FormEvent) => {
     event.preventDefault()
     if (!addUrl.trim()) return
-    setAdding(true)
-    try {
-      await onAddChannel(addUrl.trim())
-      setAddUrl('')
-      setAddOpen(false)
-    } finally {
-      setAdding(false)
-    }
+    addChannelMutation.mutate(addUrl.trim(), {
+      onSuccess: () => {
+        setAddUrl('')
+        setAddOpen(false)
+      },
+    })
   }
 
-  const scan = async () => {
-    setScanning(true)
-    try {
-      await onScan()
-    } finally {
-      setScanning(false)
-    }
+  const scan = () => {
+    if (selectedChannelId === null) return
+    scanChannelMutation.mutate(selectedChannelId)
   }
 
   return (
     <aside className="flex h-full flex-col gap-3 border-r border-border/60 bg-sidebar">
       {/* 추천 검색 */}
       <div className="space-y-2 p-3">
+        <div>
+          <p className="text-xs font-medium text-foreground/80">메타데이터 추천</p>
+          <p className="text-[0.7rem] text-muted-foreground">
+            제목과 영상 설명의 embedding 유사도만 사용합니다.
+          </p>
+        </div>
         <form onSubmit={search} className="relative">
           <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -120,7 +119,7 @@ export function Sidebar({
                 닫기
               </button>
             </div>
-            {searching ? (
+            {recommendMutation.isPending ? (
               <p className="px-3 pb-2 text-xs text-muted-foreground">검색 중…</p>
             ) : results.length === 0 ? (
               <p className="px-3 pb-2 text-xs text-muted-foreground">추천 결과가 없습니다.</p>
@@ -172,7 +171,12 @@ export function Sidebar({
               className="h-8 text-xs"
               onChange={(event) => setAddUrl(event.target.value)}
             />
-            <Button type="submit" size="sm" className="h-8" disabled={adding || !addUrl.trim()}>
+            <Button
+              type="submit"
+              size="sm"
+              className="h-8"
+              disabled={addChannelMutation.isPending || !addUrl.trim()}
+            >
               등록
             </Button>
           </form>
@@ -202,10 +206,10 @@ export function Sidebar({
           variant="outline"
           size="sm"
           className="w-full"
-          disabled={selectedChannelId === null || scanning}
+          disabled={selectedChannelId === null || scanChannelMutation.isPending}
           onClick={scan}
         >
-          {scanning ? '탐색 등록 중…' : '새 영상 탐색'}
+          {scanChannelMutation.isPending ? '탐색 등록 중…' : '새 영상 탐색'}
         </Button>
       </div>
 

@@ -57,6 +57,9 @@ docker compose ps
 
 API는 `http://localhost:8000/health`, Chat Server는 `http://localhost:8001/health`에서 확인할 수 있다. NCP 운영 환경에서는 `.env`에 `DATABASE_URL=postgresql://<USER>:<PASSWORD>@<CLOUD_DB_HOST>:5432/<DATABASE>?sslmode=require`, `SESSION_COOKIE_SECURE=true`, `SESSION_COOKIE_DOMAIN=.example.com`, `CORS_ALLOW_ORIGINS=https://api.example.com`, `CHAT_PUBLIC_ORIGIN=https://chat.example.com`을 설정한다. DB 계정에는 `CREATE EXTENSION vector` 실행 권한이 필요하다. 최근 대화 맥락 조회 부하를 줄일 때만 Chat Server에 `REDIS_URL=redis://<REDIS_HOST>:6379/0`과 `REDIS_CHAT_CACHE_TTL_SECONDS=3600`을 추가한다.
 
+clova voice 캐싱 환경변수 설정 
+$env:REDIS_URL = "redis://localhost:6379/0"
+
 ### 로컬 PostgreSQL + pgvector로 실행
 
 Mac에서 NCP VPC 내부 Cloud DB 주소에 연결할 수 없을 때는 `compose.local.yml` 오버레이를 사용한다. 이 파일은 Docker 내부 네트워크에 PostgreSQL + pgvector 컨테이너를 만들고, API·Chat·Worker의 `DATABASE_URL`을 `postgres` 서비스로만 덮어쓴다. `.env.local`에 운영 Cloud DB URL이 있어도 로컬 실행에는 사용하지 않는다.

@@ -7,7 +7,7 @@ import { Player, type PlayerHandle } from '@/components/Player'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { formatDuration, formatUploadDate } from '@/lib/format'
-import { isAnalysisActive, isAnalyzed, type Video } from '@/lib/types'
+import { isAnalysisActive, isAnalyzed, type Video } from '@/api/types'
 
 interface Props {
   video: Video | null
