@@ -20,7 +20,13 @@ interface Props {
   onError: (message: string) => void;
 }
 
-export function ChatPanel({ workspaceCode, videoId, videoTitle, onSeek, onError }: Props) {
+export function ChatPanel({
+  workspaceCode,
+  videoId,
+  videoTitle,
+  onSeek,
+  onError,
+}: Props) {
   const {
     turns,
     query,
@@ -79,7 +85,10 @@ export function ChatPanel({ workspaceCode, videoId, videoTitle, onSeek, onError 
     return (
       <>
         {quote.slice(0, index)}
-        <strong className="font-semibold text-foreground">{highlight}</strong>
+        {/* 형광펜 효과: 텍스트 아래쪽만 노란 배경을 깔아 마커로 칠한 것처럼 보이게 한다. */}
+        <mark className="rounded-[2px] bg-gradient-to-t from-yellow-300/ from-40% to-transparent to-40% px-0.5 text-black">
+          {highlight}
+        </mark>
         {quote.slice(index + highlight.length)}
       </>
     );
@@ -104,7 +113,13 @@ export function ChatPanel({ workspaceCode, videoId, videoTitle, onSeek, onError 
       >
         {historyHasMore && (
           <div className="flex justify-center">
-            <Button type="button" variant="ghost" size="sm" disabled={historyLoading} onClick={loadOlder}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={historyLoading}
+              onClick={loadOlder}
+            >
               {historyLoading ? "불러오는 중…" : "이전 대화"}
             </Button>
           </div>
@@ -142,7 +157,9 @@ export function ChatPanel({ workspaceCode, videoId, videoTitle, onSeek, onError 
               )}
 
               {turn.status === "error" && (
-                <p className="text-xs text-destructive">답변 생성에 실패했습니다.</p>
+                <p className="text-xs text-destructive">
+                  답변 생성에 실패했습니다.
+                </p>
               )}
 
               {turn.status === "done" && turn.answer.trim() && (
@@ -166,7 +183,9 @@ export function ChatPanel({ workspaceCode, videoId, videoTitle, onSeek, onError 
                       onClick={() => void tts.play(turn.id, turn.answer)}
                     >
                       <Volume2 />
-                      {tts.loading && tts.turnId === turn.id ? "생성 중…" : "답변 듣기"}
+                      {tts.loading && tts.turnId === turn.id
+                        ? "생성 중…"
+                        : "답변 듣기"}
                     </Button>
                   )}
                 </div>
@@ -179,7 +198,9 @@ export function ChatPanel({ workspaceCode, videoId, videoTitle, onSeek, onError 
                     <p className="text-[0.72rem] font-medium uppercase tracking-[0.08em] text-muted-foreground">
                       참고 구간
                     </p>
-                    <p className="text-[0.72rem] text-muted-foreground">클릭하면 영상 위치로 이동</p>
+                    <p className="text-[0.72rem] text-muted-foreground">
+                      클릭하면 영상 위치로 이동
+                    </p>
                   </div>
                   <ul className="space-y-1.5">
                     {turn.evidence.map((item) => (
@@ -194,18 +215,28 @@ export function ChatPanel({ workspaceCode, videoId, videoTitle, onSeek, onError 
                           }`}
                         >
                           <div className="flex items-center gap-2 text-xs">
-                            <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 font-mono text-[0.68rem] text-muted-foreground">
+                            {/* shrink-0 + whitespace-nowrap이 없으면 좁은 폭에서 "0:10–0:40" 같은
+                                타임스탬프 안쪽에서 줄바꿈이 일어나 두 줄로 쪼개진다. */}
+                            <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-muted px-2 py-0.5 font-mono text-[0.68rem] text-muted-foreground">
                               <Play className="size-3" />
-                              {formatTimestamp(item.start_seconds)}–{formatTimestamp(item.end_seconds)}
+                              {formatTimestamp(item.start_seconds)}–
+                              {formatTimestamp(item.end_seconds)}
                             </span>
                             {item.is_primary && (
-                              <span className="rounded-full border border-border/70 px-1.5 py-0.5 text-[0.65rem] font-medium text-foreground/70">
+                              <span className="shrink-0 whitespace-nowrap rounded-full border border-border/70 px-1.5 py-0.5 text-[0.65rem] font-medium text-foreground/70">
                                 주요
                               </span>
                             )}
-                            <span className="min-w-0 truncate text-muted-foreground">{item.title}</span>
+                            <span className="min-w-0 truncate text-muted-foreground">
+                              {item.title}
+                            </span>
                           </div>
-                          <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-foreground/75">
+                          {/* 하이라이트된 문장이 잘려서 안 보이는 일이 없도록, 하이라이트가 있으면 전체를 펼친다. */}
+                          <p
+                            className={`mt-1.5 text-xs leading-relaxed text-foreground/75 ${
+                              item.highlight ? "" : "line-clamp-2"
+                            }`}
+                          >
                             {quoteWithHighlight(item)}
                           </p>
                         </button>
@@ -256,12 +287,17 @@ export function ChatPanel({ workspaceCode, videoId, videoTitle, onSeek, onError 
         <form onSubmit={submit} className="flex gap-2">
           <Input
             value={query}
-            placeholder={canAsk ? "영상에 대해 질문하기" : "질문할 영상을 먼저 선택하세요"}
+            placeholder={
+              canAsk ? "영상에 대해 질문하기" : "질문할 영상을 먼저 선택하세요"
+            }
             aria-label="RAG 질문"
             disabled={!canAsk}
             onChange={(event) => setQuery(event.target.value)}
           />
-          <Button type="submit" disabled={streaming || !canAsk || !query.trim()}>
+          <Button
+            type="submit"
+            disabled={streaming || !canAsk || !query.trim()}
+          >
             {streaming ? "생성 중…" : "질문"}
           </Button>
         </form>
