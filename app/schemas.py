@@ -8,6 +8,35 @@ class ChannelCreate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=200)
 
 
+class FolderCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=1000)
+    color: Optional[str] = Field(default=None, max_length=40)
+
+
+class FolderUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=1000)
+    color: Optional[str] = Field(default=None, max_length=40)
+
+
+class FolderVideoCreate(BaseModel):
+    url: HttpUrl
+    analyze: bool = True
+    title: Optional[str] = Field(default=None, max_length=500)
+
+
+class FolderVideoAttach(BaseModel):
+    analyze: bool = False
+    source: str = Field(default="manual", max_length=40)
+
+
+class ChannelSourceCreate(BaseModel):
+    url: HttpUrl
+    name: Optional[str] = Field(default=None, max_length=200)
+    auto_scan: bool = True
+
+
 class VideoCreate(BaseModel):
     platform_video_id: str = Field(min_length=1, max_length=100)
     title: str = Field(min_length=1, max_length=500)

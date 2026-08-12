@@ -736,11 +736,19 @@ def _decorate_evidence(
 
 
 def find_evidence(
-    user_id: int, query: str, limit: int, video_id: Optional[int] = None, evidence_mode: str = "simple"
+    user_id: int,
+    query: str,
+    limit: int,
+    video_id: Optional[int] = None,
+    evidence_mode: str = "simple",
+    folder_id: Optional[int] = None,
 ) -> List[Dict]:
     query_vector = embedding(query)
     video_filter = " AND videos.id=?" if video_id is not None else ""
     video_params = (video_id,) if video_id is not None else ()
+    folder_join = " JOIN folder_videos ON folder_videos.video_id=videos.id" if folder_id is not None else ""
+    folder_filter = " AND folder_videos.folder_id=?" if folder_id is not None else ""
+    folder_params = (folder_id,) if folder_id is not None else ()
     expanded_limit = max(limit * 4, limit)
     with connection() as conn:
         if is_postgres():
@@ -754,14 +762,25 @@ def find_evidence(
                 FROM transcript_chunks AS chunks
                 LEFT JOIN transcript_paragraphs AS paragraphs ON paragraphs.id = chunks.paragraph_id
                 JOIN videos ON videos.id = chunks.video_id
+                """
+                + folder_join
+                + """
                 JOIN channels ON channels.id = videos.channel_id
                 WHERE videos.analysis_status IN ('succeeded', 'ready') AND channels.user_id=?"""
                 + video_filter
+                + folder_filter
                 + """
                 ORDER BY chunks.embedding <=> ?::vector
                 LIMIT ?
                 """,
-                (json.dumps(query_vector), user_id, *video_params, json.dumps(query_vector), expanded_limit),
+                (
+                    json.dumps(query_vector),
+                    user_id,
+                    *video_params,
+                    *folder_params,
+                    json.dumps(query_vector),
+                    expanded_limit,
+                ),
             ).fetchall()
             evidence = []
             seen = set()
@@ -797,12 +816,16 @@ def find_evidence(
             FROM transcript_chunks AS chunks
             LEFT JOIN transcript_paragraphs AS paragraphs ON paragraphs.id = chunks.paragraph_id
             JOIN videos ON videos.id = chunks.video_id
+            """
+            + folder_join
+            + """
             JOIN channels ON channels.id = videos.channel_id
             WHERE videos.analysis_status IN ('succeeded', 'ready') AND channels.user_id=?"""
             + video_filter
+            + folder_filter
             + """
             """,
-            (user_id, *video_params),
+            (user_id, *video_params, *folder_params),
         ).fetchall()
     evidence = []
     for row in rows:
@@ -834,22 +857,41 @@ def find_evidence(
     return _decorate_evidence(deduped, query, evidence_mode, query_vector)
 
 
-def _chat_scope_condition(video_id: Optional[int]) -> str:
-    return "video_id IS NULL" if video_id is None else "video_id=?"
+def _chat_scope_condition(video_id: Optional[int], folder_id: Optional[int]) -> str:
+    video_condition = "video_id IS NULL" if video_id is None else "video_id=?"
+    folder_condition = "folder_id IS NULL" if folder_id is None else "folder_id=?"
+    return folder_condition + " AND " + video_condition
+
+
+def _chat_scope_params(video_id: Optional[int], folder_id: Optional[int]) -> tuple:
+    params = []
+    if folder_id is not None:
+        params.append(folder_id)
+    if video_id is not None:
+        params.append(video_id)
+    return tuple(params)
 
 
 def record_chat_message(
-    user_id: int, role: str, content: str, evidence: Optional[List[Dict]] = None, video_id: Optional[int] = None
+    user_id: int,
+    role: str,
+    content: str,
+    evidence: Optional[List[Dict]] = None,
+    video_id: Optional[int] = None,
+    folder_id: Optional[int] = None,
 ) -> None:
     """Appends a turn and prunes the workspace's history to the configured retention window."""
     keep = max(0, config.CHAT_HISTORY_TURNS) * 2
     evidence_json = json.dumps(evidence, ensure_ascii=False, separators=(",", ":")) if evidence else None
-    scope_condition = _chat_scope_condition(video_id)
-    scope_params = (video_id,) if video_id is not None else ()
+    scope_condition = _chat_scope_condition(video_id, folder_id)
+    scope_params = _chat_scope_params(video_id, folder_id)
     with connection() as conn:
         conn.execute(
-            "INSERT INTO chat_messages(user_id, video_id, role, content, evidence_json) VALUES (?, ?, ?, ?, ?)",
-            (user_id, video_id, role, content, evidence_json),
+            """
+            INSERT INTO chat_messages(user_id, folder_id, video_id, role, content, evidence_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, folder_id, video_id, role, content, evidence_json),
         )
         conn.execute(
             f"""
@@ -863,17 +905,24 @@ def record_chat_message(
     message = {"role": role, "content": content}
     if evidence:
         message["evidence"] = evidence
-    chat_cache.append_recent(user_id, message, max_messages=keep)
+    if folder_id is None and video_id is None:
+        chat_cache.append_recent(user_id, message, max_messages=keep)
 
 
-def recent_chat_history(user_id: int, *, include_evidence: bool = False, video_id: Optional[int] = None) -> List[Dict]:
+def recent_chat_history(
+    user_id: int,
+    *,
+    include_evidence: bool = False,
+    video_id: Optional[int] = None,
+    folder_id: Optional[int] = None,
+) -> List[Dict]:
     """Returns this workspace's last CHAT_HISTORY_TURNS turns in chronological order."""
     limit = max(0, config.CHAT_HISTORY_TURNS) * 2
     if limit == 0:
         return []
-    scope_condition = _chat_scope_condition(video_id)
-    scope_params = (video_id,) if video_id is not None else ()
-    if not include_evidence:
+    scope_condition = _chat_scope_condition(video_id, folder_id)
+    scope_params = _chat_scope_params(video_id, folder_id)
+    if not include_evidence and video_id is None and folder_id is None:
         cached = chat_cache.get_recent(user_id, include_evidence=False)
         if cached is not None:
             return cached
@@ -897,7 +946,7 @@ def recent_chat_history(user_id: int, *, include_evidence: bool = False, video_i
             except (TypeError, ValueError, json.JSONDecodeError):
                 item["evidence"] = []
         history.append(item)
-    if not include_evidence:
+    if not include_evidence and video_id is None and folder_id is None:
         chat_cache.set_recent(user_id, [{"role": item["role"], "content": item["content"]} for item in history])
     return history
 
@@ -914,6 +963,7 @@ def _chat_message_item(row: Dict) -> Dict:
         evidence = []
     return {
         "id": row["id"],
+        "folder_id": row["folder_id"],
         "video_id": row["video_id"],
         "role": row["role"],
         "content": row["content"],
@@ -922,18 +972,24 @@ def _chat_message_item(row: Dict) -> Dict:
     }
 
 
-def paged_chat_history(user_id: int, *, limit: int = 20, before_id: Optional[int] = None, video_id: Optional[int] = None) -> Dict:
+def paged_chat_history(
+    user_id: int,
+    *,
+    limit: int = 20,
+    before_id: Optional[int] = None,
+    video_id: Optional[int] = None,
+    folder_id: Optional[int] = None,
+) -> Dict:
     """Returns a cursor page for UI history; LLM context still uses recent_chat_history()."""
     page_size = min(max(limit, 1), 100)
-    scope_condition = _chat_scope_condition(video_id)
+    scope_condition = _chat_scope_condition(video_id, folder_id)
     query = """
-        SELECT id, video_id, role, content, evidence_json, created_at
+        SELECT id, folder_id, video_id, role, content, evidence_json, created_at
         FROM chat_messages
         WHERE user_id=? AND """ + scope_condition + """
     """
     params: List = [user_id]
-    if video_id is not None:
-        params.append(video_id)
+    params.extend(_chat_scope_params(video_id, folder_id))
     if before_id is not None:
         query += " AND id < ?"
         params.append(before_id)
