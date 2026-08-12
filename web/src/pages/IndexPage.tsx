@@ -17,6 +17,7 @@ import { Footer } from "@/components/Footer";
 import { FlowPreview } from "@/components/FlowPreview";
 import { Reveal } from "@/components/Reveal";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useFolders } from "@/hooks/queries/folder/use-folders";
 import { useStartFolder } from "@/hooks/mutations/folder/use-start-folder";
@@ -111,15 +112,16 @@ export default function IndexPage() {
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
-      {/* 히어로: 큰 화면에서는 왼쪽 시작 폼 + 오른쪽 실시간 플로우 미리보기 2단, 좁은 화면에선 폼만. */}
-      <section className="relative flex min-h-[calc(100dvh-3.5rem)] items-center px-4 py-16">
+    <div className="min-h-0 flex-1 overflow-y-auto scroll-smooth">
+      {/* 히어로: min-height는 lg 이상에서만 강제한다. 좁은 화면은 폼 + 플로우 미리보기가
+          세로로 쌓이며 콘텐츠 높이만큼만 차지해, 스크롤 힌트와 겹치는 일이 없다. */}
+      <section className="relative flex items-center px-4 py-16 lg:min-h-[calc(100dvh-3.5rem)]">
         <div className="mx-auto grid w-full max-w-5xl items-center gap-12 lg:grid-cols-2">
           <div className="text-center lg:text-left">
-            <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+            <h1 className="text-4xl font-bold tracking-tighter text-balance sm:text-5xl lg:text-6xl">
               YouTube 영상으로 대화하기
             </h1>
-            <p className="mt-3 text-muted-foreground">
+            <p className="mx-auto mt-4 max-w-md text-muted-foreground lg:mx-0">
               영상 링크를 넣으면 폴더가 자동으로 만들어지고, 자막을 분석해 AI에게 질문할 수 있습니다.
             </p>
 
@@ -137,7 +139,7 @@ export default function IndexPage() {
                 className="border-0 bg-transparent shadow-none focus-visible:ring-0"
                 onChange={(event) => setUrl(event.target.value)}
               />
-              <Button type="submit" disabled={startMutation.isPending || !url.trim()}>
+              <Button type="submit" size="lg" disabled={startMutation.isPending || !url.trim()}>
                 {startMutation.isPending ? "시작 중…" : "분석 시작"}
               </Button>
             </form>
@@ -146,7 +148,7 @@ export default function IndexPage() {
               {FEATURES.map((feature) => (
                 <span
                   key={feature}
-                  className="rounded-full border border-border/60 bg-card/40 px-3 py-1 text-xs text-muted-foreground"
+                  className="rounded-md border border-border/60 bg-card/40 px-2.5 py-1 text-xs text-muted-foreground"
                 >
                   {feature}
                 </span>
@@ -157,7 +159,7 @@ export default function IndexPage() {
                 폴더 전환은 작업 환경(Sidebar)의 일이라, 여기선 진입 버튼 하나만 둔다. */}
             {folders.length > 0 && (
               <div className="mt-8">
-                <Button variant="outline" onClick={() => navigate("/workspace")}>
+                <Button variant="secondary" onClick={() => navigate("/workspace")}>
                   내 작업 환경 열기 <ArrowRight className="size-4" />
                 </Button>
               </div>
@@ -167,105 +169,122 @@ export default function IndexPage() {
           <FlowPreview />
         </div>
 
-        {/* 스크롤 유도 힌트. 랜딩 페이지라는 느낌을 주기 위한 장식이라 스크린리더에는 숨긴다. */}
+        {/* 스크롤 유도 힌트. lg 이상에서만 보여준다 — 모바일은 히어로 높이가 콘텐츠에 맞춰져
+            굳이 스크롤을 유도할 필요가 없고, 겹침 위험만 생긴다. 장식이라 스크린리더에는 숨긴다. */}
         <a
           href="#pain-points"
           aria-hidden="true"
-          className="absolute inset-x-0 bottom-6 flex animate-bounce justify-center text-muted-foreground transition-colors hover:text-foreground"
+          className="absolute inset-x-0 bottom-6 hidden animate-bounce justify-center text-muted-foreground transition-colors hover:text-foreground lg:flex"
         >
           <ChevronDown className="size-5" />
         </a>
       </section>
 
-      {/* 페인포인트 */}
-      <section id="pain-points" className="scroll-mt-14 border-t border-border/60 px-4 py-20">
-        <div className="mx-auto max-w-4xl text-center">
+      {/* 페인포인트: 카드 그리드 대신 좌측 헤딩 + 우측 넘버링 리스트(비대칭)로 구성 */}
+      <section id="pain-points" className="scroll-mt-14 border-t border-border/60 bg-muted/20 px-4 py-20">
+        <div className="mx-auto grid max-w-5xl gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)] lg:gap-16">
           <Reveal>
-            <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">
+            <p className="text-xs font-medium tracking-wide text-primary">흔한 상황</p>
+            <h2 className="mt-2 text-3xl font-bold tracking-tight text-balance sm:text-4xl">
               이런 적, 있지 않나요?
             </h2>
           </Reveal>
-          <div className="mt-10 grid gap-4 text-left sm:grid-cols-3">
+          <ol className="flex flex-col">
             {PAIN_POINTS.map((point, index) => (
               <Reveal key={point.title} delay={index * 100}>
-                <div className="h-full rounded-2xl border border-border/60 bg-card/40 p-5">
-                  <p className="font-medium">{point.title}</p>
-                  <p className="mt-2 text-sm text-muted-foreground">{point.body}</p>
-                </div>
-              </Reveal>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* 입력 방식 */}
-      <section className="border-t border-border/60 px-4 py-20">
-        <div className="mx-auto max-w-4xl text-center">
-          <Reveal>
-            <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">
-              영상은 어떻게 넣어도 상관없어요
-            </h2>
-            <p className="mt-3 text-muted-foreground">
-              링크 하나든, 채널이든, 재생목록이든 — 다음은 AI가 알아서 합니다.
-            </p>
-          </Reveal>
-          <div className="mt-10 grid gap-4 text-left sm:grid-cols-3">
-            {INPUT_METHODS.map(({ icon: Icon, title, body }, index) => (
-              <Reveal key={title} delay={index * 100}>
-                <div className="h-full rounded-2xl border border-border/60 bg-card/40 p-5">
-                  <span className="flex size-10 items-center justify-center rounded-xl bg-primary/15 text-primary">
-                    <Icon className="size-5" />
+                <li className={`flex gap-4 border-border/60 py-5 ${index !== 0 ? "border-t" : ""}`}>
+                  <span className="font-mono text-sm text-muted-foreground/60">
+                    {String(index + 1).padStart(2, "0")}
                   </span>
-                  <p className="mt-4 font-medium">{title}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{body}</p>
-                </div>
+                  <div>
+                    <p className="font-medium">{point.title}</p>
+                    <p className="mt-1.5 text-sm text-muted-foreground">{point.body}</p>
+                  </div>
+                </li>
               </Reveal>
             ))}
-          </div>
+          </ol>
         </div>
       </section>
 
-      {/* 결과 기능 */}
+      {/* 입력 방식: 카드 테두리 없이 아이콘 + 텍스트만 3열로 배치해 앞 섹션과 다른 리듬을 준다 */}
       <section className="border-t border-border/60 px-4 py-20">
         <div className="mx-auto max-w-5xl text-center">
           <Reveal>
-            <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">
-              영상 하나면, 답변 준비 끝
+            <p className="text-xs font-medium tracking-wide text-primary">이용 방법</p>
+            <h2 className="mt-2 text-3xl font-bold tracking-tight text-balance sm:text-4xl">
+              영상은 어떻게 넣어도 상관없어요
             </h2>
-            <p className="mt-3 text-muted-foreground">
-              넣기만 하면 질문할 준비까지 전부 자동으로 만들어져요.
+            <p className="mx-auto mt-3 max-w-md text-muted-foreground">
+              링크 하나든, 채널이든, 재생목록이든 — 다음은 AI가 알아서 합니다.
             </p>
           </Reveal>
-          <div className="mt-10 grid gap-4 text-left sm:grid-cols-2 lg:grid-cols-5">
-            {OUTPUT_FEATURES.map(({ icon: Icon, title, body }, index) => (
-              <Reveal key={title} delay={index * 80}>
-                <div className="h-full rounded-2xl border border-border/60 bg-card/40 p-5">
-                  <div className="flex items-center justify-between">
-                    <span className="flex size-10 items-center justify-center rounded-xl bg-primary/15 text-primary">
-                      <Icon className="size-5" />
-                    </span>
-                    <span className="font-mono text-xs text-muted-foreground/60">
-                      {String(index + 1).padStart(2, "0")}
-                    </span>
-                  </div>
-                  <p className="mt-4 font-medium">{title}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{body}</p>
-                </div>
+          <div className="mt-12 grid gap-x-8 gap-y-10 text-left sm:grid-cols-3">
+            {INPUT_METHODS.map(({ icon: Icon, title, body }, index) => (
+              <Reveal key={title} delay={index * 100}>
+                <span className="flex size-11 items-center justify-center rounded-xl bg-primary/15 text-primary">
+                  <Icon className="size-5" />
+                </span>
+                <p className="mt-4 font-medium">{title}</p>
+                <p className="mt-1.5 text-sm text-muted-foreground">{body}</p>
               </Reveal>
             ))}
           </div>
         </div>
       </section>
 
-      {/* 최종 CTA */}
-      <section className="border-t border-border/60 px-4 py-20 text-center">
+      {/* 결과 기능: shadcn Card를 재사용하고, 5개 항목을 2+3 비대칭 그리드로 배치 */}
+      <section className="border-t border-border/60 bg-muted/20 px-4 py-20">
+        <div className="mx-auto max-w-5xl text-center">
+          <Reveal>
+            <p className="text-xs font-medium tracking-wide text-primary">제공 기능</p>
+            <h2 className="mt-2 text-3xl font-bold tracking-tight text-balance sm:text-4xl">
+              영상 하나면, 답변 준비 끝
+            </h2>
+            <p className="mx-auto mt-3 max-w-md text-muted-foreground">
+              넣기만 하면 질문할 준비까지 전부 자동으로 만들어져요.
+            </p>
+          </Reveal>
+          <div className="mt-10 grid gap-4 text-left sm:grid-cols-2 lg:grid-cols-6">
+            {OUTPUT_FEATURES.map(({ icon: Icon, title, body }, index) => (
+              <Reveal
+                key={title}
+                delay={index * 80}
+                className={index < 2 ? "lg:col-span-3" : "lg:col-span-2"}
+              >
+                <Card className="h-full">
+                  <CardContent className="flex h-full flex-col gap-4">
+                    <div className="flex items-center justify-between">
+                      <span className="flex size-10 items-center justify-center rounded-xl bg-primary/15 text-primary">
+                        <Icon className="size-5" />
+                      </span>
+                      <span className="font-mono text-xs text-muted-foreground/60">
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="font-medium">{title}</p>
+                      <p className="mt-1 text-sm text-muted-foreground">{body}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </Reveal>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* 최종 CTA: 배경 톤을 구분하고 여백·버튼 크기를 키워 시각적 클라이맥스로 만든다 */}
+      <section className="border-t border-border/60 bg-primary/5 px-4 py-24 text-center">
         <Reveal className="mx-auto max-w-2xl">
-          <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">지금 바로 시작하세요</h2>
-          <p className="mt-3 text-muted-foreground">
+          <h2 className="text-3xl font-bold tracking-tight text-balance sm:text-4xl">
+            지금 바로 시작하세요
+          </h2>
+          <p className="mx-auto mt-3 max-w-md text-muted-foreground">
             영상 하나로 폴더를 시작합니다. 이후 작업 환경에서 링크를 더 추가하거나
             채널을 연결해 자동으로 모을 수 있습니다.
           </p>
-          <Button asChild className="mt-6">
+          <Button asChild size="lg" className="mt-8">
             <a href="#start-form">지금 시작하기</a>
           </Button>
         </Reveal>

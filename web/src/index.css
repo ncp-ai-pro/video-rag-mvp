@@ -130,30 +130,12 @@
     }
 }
 
-/* 랜딩 페이지 히어로의 "실제 동작 미리보기" 카드가 순서대로 나타났다 사라지는 루프 애니메이션. */
-@keyframes flow-card {
-  0%, 5% {
-    opacity: 0;
-    transform: translateY(14px) scale(0.98);
-  }
-  12%, 55% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  68%, 100% {
-    opacity: 0;
-    transform: translateY(-8px) scale(0.98);
-  }
-}
-
-@keyframes flow-progress {
-  0%, 12% {
+/* 랜딩 페이지 히어로의 "실제 동작 미리보기" 타임라인에서 활성 단계의 진행바가 채워지는 애니메이션. */
+@keyframes fill-progress {
+  from {
     width: 0%;
   }
-  40% {
-    width: 70%;
-  }
-  55%, 100% {
+  to {
     width: 100%;
   }
 }
