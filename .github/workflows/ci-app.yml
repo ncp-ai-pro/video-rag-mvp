@@ -1,0 +1,57 @@
+name: CI App
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "tests/**"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - "Dockerfile"
+      - "compose.yml"
+      - "compose.local.yml"
+      - ".github/workflows/ci-app.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "tests/**"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - "Dockerfile"
+      - "compose.yml"
+      - "compose.local.yml"
+      - ".github/workflows/ci-app.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: FastAPI app
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Check Python imports
+        run: python -m compileall -q app
+
+      - name: Run Python tests
+        run: python -m pytest -q
+
+      - name: Build app Docker image
+        run: docker build -f Dockerfile -t yt-rag-app:ci .
