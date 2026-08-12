@@ -40,6 +40,15 @@ def _rabbitmq_url() -> str:
     return getattr(config, "RABBITMQ_URL", "").strip()
 
 
+def queue_name() -> str:
+    return getattr(config, "RABBITMQ_QUEUE", QUEUE_NAME).strip() or QUEUE_NAME
+
+
+def queue_arguments() -> Mapping[str, int]:
+    max_priority = int(getattr(config, "RABBITMQ_PRIORITY_MAX", QUEUE_ARGUMENTS["x-max-priority"]))
+    return {"x-max-priority": max_priority}
+
+
 def publish_analysis_job(
     job_id: int,
     kind: str,
@@ -73,10 +82,11 @@ def publish_analysis_job(
     connection = pika.BlockingConnection(parameters)
     try:
         channel = connection.channel()
-        channel.queue_declare(queue=QUEUE_NAME, durable=True, arguments=QUEUE_ARGUMENTS)
+        name = queue_name()
+        channel.queue_declare(queue=name, durable=True, arguments=queue_arguments())
         channel.basic_publish(
             exchange="",
-            routing_key=QUEUE_NAME,
+            routing_key=name,
             body=payload,
             properties=pika.BasicProperties(delivery_mode=2, priority=values["rabbitmq"]),
         )

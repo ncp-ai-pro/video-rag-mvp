@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import config
-from .analysis_queue import QUEUE_ARGUMENTS, QUEUE_NAME
+from .analysis_queue import queue_arguments, queue_name
 from .db import connection, initialize, is_postgres
 from .services import (
     ANALYSIS_MESSAGES,
@@ -504,7 +504,8 @@ def consume_rabbitmq():
     connection_params = pika.URLParameters(config.RABBITMQ_URL)
     rabbit = pika.BlockingConnection(connection_params)
     channel = rabbit.channel()
-    channel.queue_declare(queue=QUEUE_NAME, durable=True, arguments=QUEUE_ARGUMENTS)
+    name = queue_name()
+    channel.queue_declare(queue=name, durable=True, arguments=queue_arguments())
     channel.basic_qos(prefetch_count=config.WORKER_PREFETCH_COUNT)
 
     def on_message(ch, method, properties, body):
@@ -517,7 +518,7 @@ def consume_rabbitmq():
         except Exception:
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
 
-    channel.basic_consume(queue=QUEUE_NAME, on_message_callback=on_message)
+    channel.basic_consume(queue=name, on_message_callback=on_message)
     channel.start_consuming()
 
 

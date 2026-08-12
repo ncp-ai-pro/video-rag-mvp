@@ -152,6 +152,8 @@ def test_folder_kakao_import_extracts_unique_youtube_links_without_metadata_fetc
             videos = client.get(f"/folders/{folder['id']}/videos").json()["items"]
             assert len(videos) == 2
             assert {video["analysis_status"] for video in videos} == {"metadata_only"}
+            snapshot = client.get("/ops/queue").json()
+            assert snapshot["import_batches"] == [{"status": "completed", "count": 1}]
 
         with db.connection() as conn:
             assert conn.execute("SELECT COUNT(*) AS count FROM import_batches").fetchone()["count"] == 1
