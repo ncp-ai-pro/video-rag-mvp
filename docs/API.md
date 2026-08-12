@@ -9,6 +9,24 @@ API 주소: `http://127.0.0.1:8000` · Chat 주소: `http://127.0.0.1:8001`
 | `GET` | `/auth/me` | 현재 브라우저의 익명 작업공간과 코드 확인 | 200 |
 | `POST` | `/auth/workspace` | 작업공간 코드로 현재 브라우저를 기존 작업공간에 연결 | 200 |
 | `POST` | `/auth/new-workspace` | 새 익명 작업공간으로 전환 | 201 |
+| `GET` | `/folders` | 현재 작업공간의 지식 폴더 목록과 영상/후보 카운트 조회 | 200 |
+| `POST` | `/folders` | 지식 폴더 생성 | 201 |
+| `GET` | `/folders/{folder_id}` | 폴더 상세, 영상 요약, 채널 소스 요약 조회 | 200 |
+| `PATCH` | `/folders/{folder_id}` | 폴더 이름, 설명, 색상 수정 | 200 |
+| `DELETE` | `/folders/{folder_id}` | 폴더 삭제. 영상 원본은 유지 | 204 |
+| `GET` | `/folders/{folder_id}/videos` | 폴더에 들어간 분석/수집 영상 목록 조회 | 200 |
+| `POST` | `/folders/{folder_id}/videos` | YouTube URL을 폴더에 직접 추가하고 선택적으로 분석 작업 등록 | 201 |
+| `POST` | `/folders/{folder_id}/videos/{video_id}` | 기존 작업공간 영상을 폴더에 연결 | 201 |
+| `DELETE` | `/folders/{folder_id}/videos/{video_id}` | 폴더에서 영상 연결 제거 | 204 |
+| `GET` | `/folders/{folder_id}/channel-sources` | 폴더에 연결된 채널 수집 소스 목록 조회 | 200 |
+| `POST` | `/folders/{folder_id}/channel-sources` | 폴더에 채널 수집 소스 추가 | 201 |
+| `POST` | `/folders/{folder_id}/channel-sources/{source_id}/scan` | 폴더 채널 소스의 메타데이터 수집 작업 등록 | 202 |
+| `GET` | `/folders/{folder_id}/candidates` | 폴더 채널 소스에서 수집됐지만 아직 폴더에 편입되지 않은 후보 조회 | 200 |
+| `POST` | `/folders/{folder_id}/candidates/{candidate_id}/analyze` | 후보 영상을 폴더에 편입하고 분석 작업 등록 | 202 |
+| `POST` | `/folders/{folder_id}/recommendations` | 폴더 화면용 메타데이터 추천 조회 | 200 |
+| `POST` | `/folders/{folder_id}/chat` | 폴더 안 분석 완료 영상만 검색해 완료 답변 반환 | 200 |
+| `POST` | `/folders/{folder_id}/chat/stream` | 폴더 안 분석 완료 영상만 검색해 token SSE 반환 | 200 |
+| `GET` | `/folders/{folder_id}/chat/history` | 폴더 단위 채팅 기록 조회 | 200 |
 | `POST` | `/channels` | YouTube 채널 URL 등록 | 201 |
 | `GET` | `/channels` | 등록 채널 목록 | 200 |
 | `GET` | `/channels/{channel_id}/videos` | 선택 채널의 메타데이터 목록 | 200 |
@@ -40,7 +58,26 @@ POST /auth/workspace
 { "workspace_code": "ABCD2345" }
 ```
 
+```json
+POST /folders
+{ "name": "LangGraph RAG", "description": "조건부 엣지와 RAG 실습 모음", "color": "amber" }
+```
+
+```json
+POST /folders/1/videos
+{ "url": "https://www.youtube.com/watch?v=abc123", "analyze": true }
+```
+
+```json
+POST /folders/1/chat
+{ "query": "이 폴더 영상 기준으로 RAG 흐름을 설명해줘", "limit": 3, "evidence_mode": "simple" }
+```
+
 `/recommendations`의 결과는 `basis: "제목과 영상 설명의 embedding 유사도"`를 포함한다. `/chat`의 `evidence[]`는 각 `start_seconds`, `end_seconds`, `url`을 포함한다. `video_id`를 보내면 Chat Server가 현재 작업공간 소유 영상인지 확인한 뒤 해당 영상의 자막과 대화 기록만 사용한다. 다른 작업공간의 `video_id`는 `404`를 반환한다.
+
+폴더 API는 기존 채널/영상 API를 제거하지 않고 그 위에 폴더 연결을 추가한다. `POST /folders/{folder_id}/videos`는 현재 구현에서 내부 `직접 추가 영상` channel을 사용해 `videos.channel_id NOT NULL` 구조와 기존 Worker를 그대로 재사용한다. `GET /folders/{folder_id}/candidates`의 `candidate_id`는 현재 구현 기준으로 `video_id`와 같다. 채널 소스에서 수집된 영상 중 아직 `folder_videos`에 연결되지 않은 영상을 후보로 노출한다.
+
+운영 PostgreSQL에는 배포 전에 [docs/db/2026-08-12-folder-first-postgres.sql](db/2026-08-12-folder-first-postgres.sql)을 적용한다. 애플리케이션 시작 시에도 같은 구조를 `CREATE TABLE IF NOT EXISTS`와 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`로 보강하지만, 운영 배포에서는 DB 계정 권한과 서비스 시작 순서를 분리하기 위해 SQL을 먼저 실행하는 것을 권장한다.
 
 `evidence_mode`는 다음 값을 받는다.
 

@@ -3,6 +3,7 @@
 from .routers.chat import router as chat_router
 from .db import is_postgres
 from .web import create_web_app
+from .routers.folders import router as folders_router
 from .routers.tts import router as tts_router
 
 
@@ -15,4 +16,5 @@ def health():
 
 
 app.include_router(chat_router)
+app.include_router(folders_router)
 app.include_router(tts_router)

@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import CHAT_PUBLIC_ORIGIN
 from .db import connection, is_postgres, is_unique_violation
 from .dependencies import current_workspace
+from .routers.folders import router as folders_router
 from .schemas import ChannelCreate, SearchRequest, TranscriptImport, VideoCreate, WorkspaceConnect
 from .services import (
     analysis_event_state,
@@ -24,6 +25,7 @@ from .web import create_web_app
 
 
 app = create_web_app(title="Video RAG API", version="0.2.0")
+app.include_router(folders_router)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 SSE_POLL_INTERVAL_SECONDS = 1
 SSE_HEARTBEAT_SECONDS = 20
