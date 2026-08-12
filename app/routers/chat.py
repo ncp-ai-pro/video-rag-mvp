@@ -1,8 +1,8 @@
 import json
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, PlainTextResponse, Response
 
 from ..dependencies import current_workspace
 from ..schemas import ChatRequest
@@ -14,6 +14,8 @@ from ..services import (
     recent_chat_history,
     stream_answer,
     video_belongs_to_workspace,
+    export_chat_transcript_pdf,
+    export_chat_transcript_txt,
 )
 
 
@@ -78,4 +80,33 @@ def chat_stream(payload: ChatRequest, workspace: Dict = Depends(current_workspac
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+@router.get("/chat/export")
+def chat_export(
+    video_id: Optional[int] = Query(default=None, ge=1),
+    message_ids: Optional[List[int]] = Query(default=None),
+    format: Literal["txt", "pdf"] = Query(default="txt"),
+    workspace: Dict = Depends(current_workspace),
+):
+    scoped_video_id = _verified_video_id(workspace["id"], video_id)
+
+    if format == "pdf":
+        try:
+            content = export_chat_transcript_pdf(workspace["id"], video_id=scoped_video_id, message_ids=message_ids)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        filename = f"chat-export-video-{scoped_video_id}.pdf" if scoped_video_id else "chat-export.pdf"
+        return Response(
+            content=content,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    transcript = export_chat_transcript_txt(workspace["id"], video_id=scoped_video_id, message_ids=message_ids)
+    filename = f"chat-export-video-{scoped_video_id}.txt" if scoped_video_id else "chat-export.txt"
+    return PlainTextResponse(
+        transcript,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

@@ -187,3 +187,27 @@ export async function askChat(
   }
   return (await response.json()) as ChatResponse;
 }
+
+export async function exportChatTranscript(
+  videoId?: number | null,
+  messageIds?: number[],
+  format: "txt" | "pdf" = "txt",
+): Promise<Blob> {
+  const params = new URLSearchParams();
+  if (videoId != null) params.set("video_id", String(videoId));
+  if (messageIds && messageIds.length > 0) {
+    for (const id of messageIds) params.append("message_ids", String(id));
+  }
+  params.set("format", format);
+  const response = await fetch(`${CHAT_BASE}/chat/export?${params.toString()}`, {
+    credentials: CHAT_CREDENTIALS,
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(
+      typeof body?.detail === "string" ? body.detail : "대화 내보내기에 실패했습니다.",
+      response.status,
+    );
+  }
+  return response.blob();
+}
