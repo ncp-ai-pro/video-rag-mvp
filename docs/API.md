@@ -77,6 +77,8 @@ POST /folders/1/chat
 
 폴더 API는 기존 채널/영상 API를 제거하지 않고 그 위에 폴더 연결을 추가한다. `POST /folders/{folder_id}/videos`는 현재 구현에서 내부 `직접 추가 영상` channel을 사용해 `videos.channel_id NOT NULL` 구조와 기존 Worker를 그대로 재사용한다. `GET /folders/{folder_id}/candidates`의 `candidate_id`는 현재 구현 기준으로 `video_id`와 같다. 채널 소스에서 수집된 영상 중 아직 `folder_videos`에 연결되지 않은 영상을 후보로 노출한다.
 
+운영 PostgreSQL에는 배포 전에 [docs/db/2026-08-12-folder-first-postgres.sql](db/2026-08-12-folder-first-postgres.sql)을 적용한다. 애플리케이션 시작 시에도 같은 구조를 `CREATE TABLE IF NOT EXISTS`와 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`로 보강하지만, 운영 배포에서는 DB 계정 권한과 서비스 시작 순서를 분리하기 위해 SQL을 먼저 실행하는 것을 권장한다.
+
 `evidence_mode`는 다음 값을 받는다.
 
 | 값 | 동작 |
