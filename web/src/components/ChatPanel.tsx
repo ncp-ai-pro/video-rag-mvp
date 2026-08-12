@@ -7,6 +7,8 @@ import { useChat } from "@/hooks/chat/use-chat";
 import { useTts } from "@/hooks/chat/use-tts";
 import { formatTimestamp, playbackUrl, youtubeIdFromUrl } from "@/lib/format";
 import type { Evidence } from "@/api/types";
+import { useExportChat } from "@/hooks/chat/use-export-chat";
+import { useState } from "react";
 
 interface Props {
   /** 작업공간이 바뀌면 그 작업공간의 대화 기록을 다시 불러온다. */
@@ -44,6 +46,21 @@ export function ChatPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const preserveScrollHeightRef = useRef<number | null>(null);
   const tts = useTts(onError);
+  const { exportingFormat, exportChat } = useExportChat(onError);
+  const [selectedTurnIds, setSelectedTurnIds] = useState<Set<string>>(new Set());
+
+  const toggleTurnSelection = (turnId: string) => {
+    setSelectedTurnIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(turnId)) next.delete(turnId);
+      else next.add(turnId);
+      return next;
+    });
+  };
+
+  const selectedMessageIds = Array.from(selectedTurnIds)
+    .map((id) => (id.startsWith("message-") ? Number(id.slice("message-".length)) : null))
+    .filter((id): id is number => id !== null);
 
   // 새 내용이 생기면 맨 아래로. 이전 대화를 앞에 붙였을 때는 보던 위치가 그대로 보이도록 높이를 보정한다.
   useLayoutEffect(() => {
@@ -139,9 +156,18 @@ export function ChatPanel({
             <div key={turn.id} className="space-y-2">
               {/* 사용자 질문 */}
               <div className="flex justify-end">
-                <p className="max-w-[85%] rounded-2xl rounded-tr-sm bg-primary px-3 py-2 text-sm text-primary-foreground">
+                <button
+                  type="button"
+                  disabled={!turn.id.startsWith("message-")}
+                  onClick={() => toggleTurnSelection(turn.id)}
+                  className={`max-w-[85%] rounded-2xl rounded-tr-sm px-3 py-2 text-left text-sm text-primary-foreground transition-colors ${
+                    selectedTurnIds.has(turn.id)
+                      ? "bg-primary ring-2 ring-primary ring-offset-2 ring-offset-background"
+                      : "bg-primary/80 hover:bg-primary"
+                  }`}
+                >
                   {turn.question}
-                </p>
+                </button>
               </div>
 
               {/* AI 답변 */}
@@ -325,6 +351,24 @@ export function ChatPanel({
           >
             {streaming ? "생성 중…" : "질문"}
           </Button>
+          <Button
+  type="button"
+  variant="ghost"
+  size="sm"
+  disabled={!videoId || turns.length === 0 || exportingFormat !== null}
+  onClick={() => void exportChat(videoId, selectedMessageIds.length > 0 ? selectedMessageIds : undefined, "txt")}
+>
+  {exportingFormat === "txt" ? "내보내는 중…" : "TXT"}
+</Button>
+<Button
+  type="button"
+  variant="ghost"
+  size="sm"
+  disabled={!videoId || turns.length === 0 || exportingFormat !== null}
+  onClick={() => void exportChat(videoId, selectedMessageIds.length > 0 ? selectedMessageIds : undefined, "pdf")}
+>
+  {exportingFormat === "pdf" ? "내보내는 중…" : "PDF"}
+</Button>
         </form>
       </div>
     </div>
