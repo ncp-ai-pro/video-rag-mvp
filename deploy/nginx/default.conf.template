@@ -2,12 +2,17 @@ server {
     listen 80;
     server_name _;
 
+    # Expose the responding web container hostname so ALB distribution can be
+    # checked from browser DevTools or curl response headers.
+    add_header X-Backend-Host $hostname always;
+
     root /usr/share/nginx/html;
     index index.html;
 
     location = /health {
         access_log off;
-        add_header Content-Type text/plain;
+        default_type text/plain;
+        add_header X-Backend-Host $hostname always;
         return 200 "ok\n";
     }
 
@@ -17,14 +22,16 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
-    # Backend entrypoint. In production this points to the NKS internal Ingress
-    # or an internal ALB in front of api/chat services.
+    # Backend entrypoint. In production this points to the NKS private ALB
+    # created by the NKS Gateway API Adapter.
     #
-    # Expected routing behind this upstream:
-    # - /api/chat* -> chat-service
-    # - /api/*     -> api-service
+    # Browser-facing requests keep the /api prefix, but FastAPI and Chat
+    # services do not serve under /api. Strip it here before forwarding:
+    # - /api/chat* -> /chat* -> chat-service
+    # - /api/*     -> /*     -> api-service
     location /api/ {
-        proxy_pass ${BACKEND_INGRESS_ORIGIN}/api/;
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass ${BACKEND_INGRESS_ORIGIN};
         proxy_http_version 1.1;
 
         proxy_set_header Host $host;
@@ -39,4 +46,3 @@ server {
         proxy_send_timeout 300s;
     }
 }
-

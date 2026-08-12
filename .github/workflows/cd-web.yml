@@ -8,7 +8,6 @@ on:
       - "web/**"
       - "Dockerfile.web"
       - "deploy/nginx/**"
-      - "compose.web.yml"
       - ".github/workflows/cd-web.yml"
 
 permissions:
@@ -20,10 +19,11 @@ concurrency:
 
 env:
   WEB_IMAGE_NAME: kimgt2828/yt-rag-web
+  NCP_SOURCEDEPLOY_API_ORIGIN: https://vpcsourcedeploy.apigw.ntruss.com
 
 jobs:
-  build-and-push:
-    name: Build and push web image
+  deploy-web:
+    name: Build, push, and trigger web deploy
     runs-on: ubuntu-latest
 
     steps:
@@ -76,15 +76,78 @@ jobs:
             -t "${{ steps.tags.outputs.version_tag }}" \
             --push .
 
-      - name: Deployment note
+      - name: Trigger NCP SourceDeploy web scenario
+        env:
+          NCP_ACCESS_KEY: ${{ secrets.NCP_ACCESS_KEY }}
+          NCP_SECRET_KEY: ${{ secrets.NCP_SECRET_KEY }}
+          NCP_SOURCEDEPLOY_PROJECT_ID: ${{ vars.NCP_SOURCEDEPLOY_PROJECT_ID }}
+          NCP_SOURCEDEPLOY_STAGE_ID: ${{ vars.NCP_SOURCEDEPLOY_STAGE_ID }}
+          NCP_SOURCEDEPLOY_WEB_SCENARIO_ID: ${{ vars.NCP_SOURCEDEPLOY_WEB_SCENARIO_ID }}
+        run: |
+          test -n "${NCP_ACCESS_KEY}"
+          test -n "${NCP_SECRET_KEY}"
+          test -n "${NCP_SOURCEDEPLOY_PROJECT_ID}"
+          test -n "${NCP_SOURCEDEPLOY_STAGE_ID}"
+          test -n "${NCP_SOURCEDEPLOY_WEB_SCENARIO_ID}"
+
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import hmac
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          method = "POST"
+          origin = os.environ["NCP_SOURCEDEPLOY_API_ORIGIN"].rstrip("/")
+          project_id = os.environ["NCP_SOURCEDEPLOY_PROJECT_ID"]
+          stage_id = os.environ["NCP_SOURCEDEPLOY_STAGE_ID"]
+          scenario_id = os.environ["NCP_SOURCEDEPLOY_WEB_SCENARIO_ID"]
+          access_key = os.environ["NCP_ACCESS_KEY"]
+          secret_key = os.environ["NCP_SECRET_KEY"]
+
+          uri = f"/api/v1/project/{project_id}/stage/{stage_id}/scenario/{scenario_id}/deploy"
+          timestamp = str(int(time.time() * 1000))
+          message = f"{method} {uri}\n{timestamp}\n{access_key}"
+          signature = base64.b64encode(
+              hmac.new(secret_key.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).digest()
+          ).decode("utf-8")
+
+          request = urllib.request.Request(
+              f"{origin}{uri}",
+              data=b"",
+              method=method,
+              headers={
+                  "Content-Type": "application/json",
+                  "x-ncp-apigw-timestamp": timestamp,
+                  "x-ncp-iam-access-key": access_key,
+                  "x-ncp-apigw-signature-v2": signature,
+              },
+          )
+
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  body = response.read().decode("utf-8")
+                  print(f"SourceDeploy status: {response.status}")
+                  print(body)
+          except urllib.error.HTTPError as error:
+              body = error.read().decode("utf-8", "replace")
+              print(f"SourceDeploy failed: HTTP {error.code}", file=sys.stderr)
+              print(body, file=sys.stderr)
+              raise
+          PY
+
+      - name: Deployment summary
         run: |
           {
-            echo "### Web image pushed"
+            echo "### Web deployment triggered"
             echo ""
             echo "- Stable tag: \`${{ steps.tags.outputs.stable_tag }}\`"
             echo "- Trace tag: \`${{ steps.tags.outputs.version_tag }}\`"
+            echo "- SourceDeploy scenario id: \`${{ vars.NCP_SOURCEDEPLOY_WEB_SCENARIO_ID }}\`"
             echo ""
-            echo "This workflow does not update Object Storage \`web/.env\`."
-            echo "Keep \`WEB_IMAGE=${{ steps.tags.outputs.stable_tag }}\` in \`s3://yt-rag-deploy-v2/web/.env\`."
-            echo "Reflect the new image by replacing ASG instances or scaling out new web servers."
+            echo "This workflow does not update SourceDeploy Object Storage artifacts or \`web/.env\`."
+            echo "SourceDeploy uses the artifact configured in the scenario."
           } >> "$GITHUB_STEP_SUMMARY"
