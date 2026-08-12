@@ -21,7 +21,7 @@ export function VideoStage({ video, playerRef, onAnalyze }: Props) {
       <div className="grid flex-1 place-items-center text-center text-muted-foreground">
         <div className="space-y-3">
           <PlayCircle className="mx-auto size-10 opacity-40" />
-          <p className="text-sm">왼쪽에서 영상을 선택하면 여기에 재생됩니다.</p>
+          <p className="text-sm">영상 목록에서 선택하면 여기에 재생됩니다.</p>
         </div>
       </div>
     )

@@ -8,15 +8,6 @@ export interface Workspace {
   workspace_code: string;
 }
 
-export interface Channel {
-  id: number;
-  user_id: number;
-  url: string;
-  name: string | null;
-  created_at: string;
-  last_scanned_at: string | null;
-}
-
 /** jobs.status와 동일한 어휘 */
 export type AnalysisStatus =
   | "metadata_only"
@@ -60,6 +51,30 @@ export interface JobAccepted {
   status: "queued";
 }
 
+/**
+ * POST /recommendations 항목. 제목·설명 embedding 유사도 기반, 워크스페이스 전체를 대상으로 한다.
+ * folder_id/folder_name은 원래 스펙엔 없지만, 검색 결과를 클릭했을 때 어느 폴더로 이동할지
+ * 알아야 해서 백엔드에 추가로 요청해야 하는 필드로 가정했다(헤더 전역 검색용).
+ */
+export interface Recommendation {
+  video_id: number;
+  folder_id: number;
+  folder_name: string;
+  title: string;
+  description: string;
+  url: string;
+  thumbnail_url: string | null;
+  duration_seconds: number | null;
+  score: number;
+  basis: string;
+}
+
+export interface RecommendationResponse {
+  query: string;
+  items: Recommendation[];
+  notice: string;
+}
+
 /** GET /videos/{id}/events 가 보내는 analysis_status 이벤트 */
 export interface AnalysisEvent {
   video_id: number;
@@ -71,24 +86,6 @@ export interface AnalysisEvent {
   };
   error: string | null;
   updated_at: string | null;
-}
-
-export interface Recommendation {
-  video_id: number;
-  title: string;
-  description: string;
-  url: string;
-  thumbnail_url: string | null;
-  duration_seconds: number | null;
-  uploaded_at: string | null;
-  score: number;
-  basis: string;
-}
-
-export interface RecommendationResponse {
-  query: string;
-  items: Recommendation[];
-  notice: string;
 }
 
 /**
@@ -155,3 +152,77 @@ export const isAnalyzed = (status: AnalysisStatus) =>
 
 export const isAnalysisActive = (status: AnalysisStatus) =>
   status === "queued" || status === "running";
+
+// --- folder-first-api-spec.md 기준 (백엔드 구현 중, docs/design/folder-first-api-spec.md 참고) ---
+
+/** GET /folders 항목. */
+export interface Folder {
+  id: number;
+  name: string;
+  description: string | null;
+  color: string | null;
+  video_count: number;
+  ready_count: number;
+  running_count: number;
+  candidate_count: number;
+  updated_at: string | null;
+}
+
+/** POST /folders 응답(목록 항목보다 필드가 적다). */
+export interface FolderCreateResponse {
+  id: number;
+  name: string;
+  description: string | null;
+  color: string | null;
+  created_at: string;
+}
+
+/**
+ * GET /folders/{id}/videos 의 항목을 Video와 호환되게 만든 형태.
+ * 스펙 응답엔 platform_video_id/description/uploaded_at/analysis_error가 없어서
+ * api/folder.ts에서 매핑할 때 채워 넣는다(Player·VideoStage를 그대로 재사용하기 위함).
+ */
+export interface FolderVideo extends Video {
+  folder_id: number;
+  /** 이 영상이 폴더에 들어온 경로. */
+  source: "direct" | "candidate" | "channel_scan" | "manual";
+  source_label: string | null;
+  evidence_count: number;
+  added_at: string;
+  analyzed_at: string | null;
+}
+
+/** GET /folders/{id}/candidates 의 항목. 아직 videos에 없을 수도 있어 video_id가 nullable이다. */
+export interface FolderCandidate {
+  id: number;
+  folder_id: number;
+  channel_source_id: number | null;
+  video_id: number | null;
+  title: string;
+  description: string;
+  url: string;
+  thumbnail_url: string | null;
+  duration_seconds: number | null;
+  source_label: string | null;
+  score: number | null;
+  basis: string | null;
+  status: "new" | "queued" | "added" | "dismissed";
+}
+
+/** POST /folders/{id}/candidates/{id}/analyze 응답. */
+export interface CandidateAnalyzeResponse {
+  candidate: { id: number; status: FolderCandidate["status"] };
+  video: { id: number; title: string; analysis_status: AnalysisStatus };
+  folder_video: { folder_id: number; video_id: number; source: FolderVideo["source"] };
+  job: JobAccepted;
+}
+
+/** GET/POST /folders/{id}/channel-sources 의 항목. */
+export interface ChannelSource {
+  id: number;
+  folder_id: number;
+  url: string;
+  name: string | null;
+  last_scanned_at: string | null;
+  candidate_count: number;
+}

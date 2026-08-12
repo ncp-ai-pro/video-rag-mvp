@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Link, Outlet } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 
 import Logo from "@/assets/logo.png";
-import { Footer } from "@/components/Footer";
+import { HeaderSearch } from "@/components/HeaderSearch";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,12 +15,16 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { useMe } from "@/hooks/queries/workspace/use-me";
 import { useConnectWorkspace } from "@/hooks/mutations/workspace/use-connect-workspace";
 import { useCreateWorkspace } from "@/hooks/mutations/workspace/use-create-workspace";
 
 export default function GlobalLayout() {
   const { data: workspace } = useMe();
+  const location = useLocation();
+  // 홈은 랜딩 페이지 성격이라 "분석된 영상 검색"이 어울리지 않는다. 작업 환경에서만 보여준다.
+  const isHome = location.pathname === "/";
   const [dialogOpen, setDialogOpen] = useState(false);
   const [code, setCode] = useState("");
 
@@ -45,20 +50,24 @@ export default function GlobalLayout() {
   };
 
   return (
+    <TooltipProvider delayDuration={200}>
     <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
       <header className="sticky top-0 z-30 border-b border-border/60 bg-background/80 backdrop-blur">
-        <div className="flex h-14 items-center justify-between px-4 sm:px-6">
+        <div className="flex h-14 items-center gap-3 px-4 sm:px-6">
           {/* 로고 = 홈 버튼 */}
-          <Link to="/" aria-label="홈으로" className="transition-opacity hover:opacity-80">
+          <Link to="/" aria-label="홈으로" className="shrink-0 transition-opacity hover:opacity-80">
             <img src={Logo} className="w-15 rounded-2xl" alt="VideRAG" />
           </Link>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-1 justify-center">{!isHome && <HeaderSearch />}</div>
+
+          <div className="flex shrink-0 items-center gap-2">
             {workspace && (
               <code className="hidden rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground sm:inline">
                 {workspace.workspace_code}
               </code>
             )}
+            <ThemeToggle />
             <Button variant="outline" size="sm" onClick={() => setDialogOpen(true)}>
               작업공간 연결
             </Button>
@@ -70,8 +79,6 @@ export default function GlobalLayout() {
       </header>
 
       <Outlet />
-
-      <Footer />
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
@@ -108,5 +115,6 @@ export default function GlobalLayout() {
         </DialogContent>
       </Dialog>
     </div>
+    </TooltipProvider>
   );
 }

@@ -3,6 +3,11 @@ import { CHAT_BASE, CHAT_CREDENTIALS } from "@/lib/config";
 import type { ChatHistoryPage, ChatResponse, Evidence, EvidenceMode, TtsVoice } from "./types";
 
 /**
+ * docs/design/folder-first-api-spec.md 기준 폴더 스코프 채팅. 백엔드가 아직 구현 중이라
+ * 경로는 스펙 문서를 따른 가정이다. 기존 /chat/*(작업공간·영상 스코프)는 그대로 유지된다.
+ */
+
+/**
  * 작업공간의 저장된 대화 기록을 최신순 커서로 페이지네이션해서 불러온다.
  * videoId를 주면 그 영상의 대화만 좁혀서 가져온다(히스토리도 영상 단위로 저장된다).
  * Chat 서버가 세션 쿠키로 작업공간을 식별한다. assistant 메시지는 그때 근거도 함께 저장돼 있다.
@@ -77,36 +82,8 @@ function toStreamEvent(event: string, raw: string): ChatStreamEvent | null {
   }
 }
 
-/**
- * video_id를 보내면 백엔드가 그 영상으로 근거를 좁힌다. null이면 작업공간 전체.
- * evidenceMode="precise"|"ultra"면 각 근거에 질문과 겹치는 문장(highlight)이 함께 붙어 온다.
- */
-export async function streamChat(
-  query: string,
-  onEvent: (event: ChatStreamEvent) => void,
-  options: {
-    limit?: number;
-    signal?: AbortSignal;
-    videoId?: number | null;
-    evidenceMode?: EvidenceMode;
-  } = {},
-): Promise<void> {
-  const response = await fetch(`${CHAT_BASE}/chat/stream`, {
-    method: "POST",
-    credentials: CHAT_CREDENTIALS,
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "text/event-stream",
-    },
-    body: JSON.stringify({
-      query,
-      limit: options.limit ?? 3,
-      video_id: options.videoId ?? null,
-      evidence_mode: options.evidenceMode ?? "simple",
-    }),
-    signal: options.signal,
-  });
-
+/** SSE 응답 본문을 프레임 단위로 읽어 이벤트를 흘려보낸다. streamChat·streamFolderChat이 공유한다. */
+async function consumeChatStream(response: Response, onEvent: (event: ChatStreamEvent) => void): Promise<void> {
   if (!response.ok || !response.body) {
     const body = await response.json().catch(() => null);
     throw new ApiError(
@@ -140,6 +117,136 @@ export async function streamChat(
       if (buffer.trim()) flush(buffer);
       return;
     }
+  }
+}
+
+/**
+ * video_id를 보내면 백엔드가 그 영상으로 근거를 좁힌다. null이면 작업공간 전체.
+ * evidenceMode="precise"|"ultra"면 각 근거에 질문과 겹치는 문장(highlight)이 함께 붙어 온다.
+ */
+export async function streamChat(
+  query: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  options: {
+    limit?: number;
+    signal?: AbortSignal;
+    videoId?: number | null;
+    evidenceMode?: EvidenceMode;
+  } = {},
+): Promise<void> {
+  const response = await fetch(`${CHAT_BASE}/chat/stream`, {
+    method: "POST",
+    credentials: CHAT_CREDENTIALS,
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({
+      query,
+      limit: options.limit ?? 3,
+      video_id: options.videoId ?? null,
+      evidence_mode: options.evidenceMode ?? "simple",
+    }),
+    signal: options.signal,
+  });
+  return consumeChatStream(response, onEvent);
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * 백엔드 /folders/{id}/chat/*가 아직 없어서, 실패하면 가짜 스트리밍 답변으로 폴백한다.
+ * TODO(backend): 실제 배포되면 streamFolderChat·fetchFolderChatHistory의 catch 블록을 지운다.
+ */
+async function mockStreamFolderChat(
+  folderId: number,
+  query: string,
+  onEvent: (event: ChatStreamEvent) => void,
+): Promise<void> {
+  console.warn(`[mock] POST /folders/${folderId}/chat/stream 실패해서 목 답변으로 대신합니다.`);
+  const evidence: Evidence[] = [
+    {
+      chunk_id: 1,
+      paragraph_id: null,
+      video_id: 1,
+      title: "LangGraph RAG에서 Conditional Edge를 쓰는 이유",
+      start_seconds: 233,
+      end_seconds: 251,
+      quote: "검색 결과가 충분하지 않으면 질문을 다시 정제하는 노드로 이동합니다.",
+      context: "검색 결과가 충분하지 않으면 질문을 다시 정제하는 노드로 이동합니다.",
+      url: "https://www.youtube.com/watch?v=eOqXQqg0_Dw",
+      score: 0.91,
+      rank: 1,
+      is_primary: true,
+    },
+  ];
+  onEvent({ type: "evidence", evidence });
+  const answer = `(목데이터) "${query}"에 대한 답변입니다. 백엔드의 폴더 채팅이 배포되면 실제 답변으로 바뀝니다.`;
+  for (const char of answer) {
+    await sleep(12);
+    onEvent({ type: "token", text: char });
+  }
+  onEvent({ type: "done", evidence });
+}
+
+/**
+ * 폴더 스코프 채팅. video_id가 없으면 폴더 안 분석 완료 영상 전체를 검색한다(폴더 전체 RAG).
+ */
+export async function streamFolderChat(
+  folderId: number,
+  query: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  options: {
+    limit?: number;
+    signal?: AbortSignal;
+    videoId?: number | null;
+    evidenceMode?: EvidenceMode;
+  } = {},
+): Promise<void> {
+  try {
+    const response = await fetch(`${CHAT_BASE}/folders/${folderId}/chat/stream`, {
+      method: "POST",
+      credentials: CHAT_CREDENTIALS,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify({
+        query,
+        limit: options.limit ?? 3,
+        video_id: options.videoId ?? null,
+        evidence_mode: options.evidenceMode ?? "simple",
+      }),
+      signal: options.signal,
+    });
+    return await consumeChatStream(response, onEvent);
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    return mockStreamFolderChat(folderId, query, onEvent);
+  }
+}
+
+/** 폴더 단위 대화 기록. video_id를 주면 폴더 안 특정 영상 대화만 좁힌다. */
+export async function fetchFolderChatHistory(
+  folderId: number,
+  options: { limit?: number; beforeId?: number | null; videoId?: number | null } = {},
+): Promise<ChatHistoryPage> {
+  const params = new URLSearchParams({ limit: String(options.limit ?? 20) });
+  if (options.beforeId != null) params.set("before_id", String(options.beforeId));
+  if (options.videoId != null) params.set("video_id", String(options.videoId));
+
+  try {
+    const response = await fetch(`${CHAT_BASE}/folders/${folderId}/chat/history?${params}`, {
+      credentials: CHAT_CREDENTIALS,
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!response.ok) {
+      throw new ApiError("대화 기록을 불러오지 못했습니다.", response.status);
+    }
+    return (await response.json()) as ChatHistoryPage;
+  } catch {
+    console.warn(`[mock] GET /folders/${folderId}/chat/history 실패해서 빈 기록으로 대신합니다.`);
+    return { items: [], has_more: false, next_cursor: null };
   }
 }
 
