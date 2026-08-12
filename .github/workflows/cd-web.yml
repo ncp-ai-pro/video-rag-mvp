@@ -1,0 +1,90 @@
+name: CD Web
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "Dockerfile.web"
+      - "deploy/nginx/**"
+      - "compose.web.yml"
+      - ".github/workflows/cd-web.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cd-web
+  cancel-in-progress: false
+
+env:
+  WEB_IMAGE_NAME: kimgt2828/yt-rag-web
+
+jobs:
+  build-and-push:
+    name: Build and push web image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build React app
+        working-directory: web
+        run: npm run build
+
+      - name: Resolve image tags
+        id: tags
+        run: |
+          short_sha="${GITHUB_SHA::12}"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "version_tag=${WEB_IMAGE_NAME}:${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "stable_tag=${WEB_IMAGE_NAME}:v1" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push web image
+        run: |
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            -f Dockerfile.web \
+            --build-arg VITE_API_BASE=/api \
+            --build-arg VITE_CHAT_BASE=/api \
+            -t "${{ steps.tags.outputs.stable_tag }}" \
+            -t "${{ steps.tags.outputs.version_tag }}" \
+            --push .
+
+      - name: Deployment note
+        run: |
+          {
+            echo "### Web image pushed"
+            echo ""
+            echo "- Stable tag: \`${{ steps.tags.outputs.stable_tag }}\`"
+            echo "- Trace tag: \`${{ steps.tags.outputs.version_tag }}\`"
+            echo ""
+            echo "This workflow does not update Object Storage \`web/.env\`."
+            echo "Keep \`WEB_IMAGE=${{ steps.tags.outputs.stable_tag }}\` in \`s3://yt-rag-deploy-v2/web/.env\`."
+            echo "Reflect the new image by replacing ASG instances or scaling out new web servers."
+          } >> "$GITHUB_STEP_SUMMARY"
