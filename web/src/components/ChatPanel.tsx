@@ -1,20 +1,23 @@
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Volume2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useExportChat } from "@/hooks/chat/use-export-chat";
 import { useTts } from "@/hooks/chat/use-tts";
 import type { UseChatResult } from "@/hooks/chat/use-chat";
 
 interface Props {
   /** 대화 상태·동작은 WorkspacePage가 useChat으로 만들어 내려준다(EvidencePanel과 turns를 공유하기 위해). */
   chat: UseChatResult;
+  /** 선택된 영상 ID. 대화 내보내기(TXT/PDF) 호출에 쓰인다. */
+  videoId: number | null;
   /** 선택된 영상 제목. 대화 대상 표시용이다. */
   videoTitle?: string | null;
   onError: (message: string) => void;
 }
 
-export function ChatPanel({ chat, videoTitle, onError }: Props) {
+export function ChatPanel({ chat, videoId, videoTitle, onError }: Props) {
   const {
     turns,
     query,
@@ -32,6 +35,25 @@ export function ChatPanel({ chat, videoTitle, onError }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const preserveScrollHeightRef = useRef<number | null>(null);
   const tts = useTts(onError);
+  const { exportingFormat, exportChat } = useExportChat(onError);
+  const [selectedTurnIds, setSelectedTurnIds] = useState<Set<string>>(
+    new Set(),
+  );
+
+  const toggleTurnSelection = (turnId: string) => {
+    setSelectedTurnIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(turnId)) next.delete(turnId);
+      else next.add(turnId);
+      return next;
+    });
+  };
+
+  const selectedMessageIds = Array.from(selectedTurnIds)
+    .map((id) =>
+      id.startsWith("message-") ? Number(id.slice("message-".length)) : null,
+    )
+    .filter((id): id is number => id !== null);
 
   // 새 내용이 생기면 맨 아래로. 이전 대화를 앞에 붙였을 때는 보던 위치가 그대로 보이도록 높이를 보정한다.
   useLayoutEffect(() => {
@@ -103,9 +125,18 @@ export function ChatPanel({ chat, videoTitle, onError }: Props) {
             <div key={turn.id} className="space-y-2">
               {/* 사용자 질문 */}
               <div className="flex justify-end">
-                <p className="max-w-[85%] rounded-2xl rounded-tr-sm bg-primary px-3 py-2 text-sm text-primary-foreground">
+                <button
+                  type="button"
+                  disabled={!turn.id.startsWith("message-")}
+                  onClick={() => toggleTurnSelection(turn.id)}
+                  className={`max-w-[85%] rounded-2xl rounded-tr-sm px-3 py-2 text-left text-sm text-primary-foreground transition-colors ${
+                    selectedTurnIds.has(turn.id)
+                      ? "bg-primary ring-2 ring-primary ring-offset-2 ring-offset-background"
+                      : "bg-primary/80 hover:bg-primary"
+                  }`}
+                >
                   {turn.question}
-                </p>
+                </button>
               </div>
 
               {/* AI 답변 */}
@@ -241,6 +272,40 @@ export function ChatPanel({ chat, videoTitle, onError }: Props) {
             disabled={streaming || !canAsk || !query.trim()}
           >
             {streaming ? "생성 중…" : "질문"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={
+              !videoId || turns.length === 0 || exportingFormat !== null
+            }
+            onClick={() =>
+              void exportChat(
+                videoId,
+                selectedMessageIds.length > 0 ? selectedMessageIds : undefined,
+                "txt",
+              )
+            }
+          >
+            {exportingFormat === "txt" ? "내보내는 중…" : "TXT"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={
+              !videoId || turns.length === 0 || exportingFormat !== null
+            }
+            onClick={() =>
+              void exportChat(
+                videoId,
+                selectedMessageIds.length > 0 ? selectedMessageIds : undefined,
+                "pdf",
+              )
+            }
+          >
+            {exportingFormat === "pdf" ? "내보내는 중…" : "PDF"}
           </Button>
         </form>
       </div>

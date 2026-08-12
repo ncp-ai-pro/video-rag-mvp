@@ -736,11 +736,19 @@ def _decorate_evidence(
 
 
 def find_evidence(
-    user_id: int, query: str, limit: int, video_id: Optional[int] = None, evidence_mode: str = "simple"
+    user_id: int,
+    query: str,
+    limit: int,
+    video_id: Optional[int] = None,
+    evidence_mode: str = "simple",
+    folder_id: Optional[int] = None,
 ) -> List[Dict]:
     query_vector = embedding(query)
     video_filter = " AND videos.id=?" if video_id is not None else ""
     video_params = (video_id,) if video_id is not None else ()
+    folder_join = " JOIN folder_videos ON folder_videos.video_id=videos.id" if folder_id is not None else ""
+    folder_filter = " AND folder_videos.folder_id=?" if folder_id is not None else ""
+    folder_params = (folder_id,) if folder_id is not None else ()
     expanded_limit = max(limit * 4, limit)
     with connection() as conn:
         if is_postgres():
@@ -754,14 +762,25 @@ def find_evidence(
                 FROM transcript_chunks AS chunks
                 LEFT JOIN transcript_paragraphs AS paragraphs ON paragraphs.id = chunks.paragraph_id
                 JOIN videos ON videos.id = chunks.video_id
+                """
+                + folder_join
+                + """
                 JOIN channels ON channels.id = videos.channel_id
                 WHERE videos.analysis_status IN ('succeeded', 'ready') AND channels.user_id=?"""
                 + video_filter
+                + folder_filter
                 + """
                 ORDER BY chunks.embedding <=> ?::vector
                 LIMIT ?
                 """,
-                (json.dumps(query_vector), user_id, *video_params, json.dumps(query_vector), expanded_limit),
+                (
+                    json.dumps(query_vector),
+                    user_id,
+                    *video_params,
+                    *folder_params,
+                    json.dumps(query_vector),
+                    expanded_limit,
+                ),
             ).fetchall()
             evidence = []
             seen = set()
@@ -797,12 +816,16 @@ def find_evidence(
             FROM transcript_chunks AS chunks
             LEFT JOIN transcript_paragraphs AS paragraphs ON paragraphs.id = chunks.paragraph_id
             JOIN videos ON videos.id = chunks.video_id
+            """
+            + folder_join
+            + """
             JOIN channels ON channels.id = videos.channel_id
             WHERE videos.analysis_status IN ('succeeded', 'ready') AND channels.user_id=?"""
             + video_filter
+            + folder_filter
             + """
             """,
-            (user_id, *video_params),
+            (user_id, *video_params, *folder_params),
         ).fetchall()
     evidence = []
     for row in rows:
@@ -834,22 +857,41 @@ def find_evidence(
     return _decorate_evidence(deduped, query, evidence_mode, query_vector)
 
 
-def _chat_scope_condition(video_id: Optional[int]) -> str:
-    return "video_id IS NULL" if video_id is None else "video_id=?"
+def _chat_scope_condition(video_id: Optional[int], folder_id: Optional[int]) -> str:
+    video_condition = "video_id IS NULL" if video_id is None else "video_id=?"
+    folder_condition = "folder_id IS NULL" if folder_id is None else "folder_id=?"
+    return folder_condition + " AND " + video_condition
+
+
+def _chat_scope_params(video_id: Optional[int], folder_id: Optional[int]) -> tuple:
+    params = []
+    if folder_id is not None:
+        params.append(folder_id)
+    if video_id is not None:
+        params.append(video_id)
+    return tuple(params)
 
 
 def record_chat_message(
-    user_id: int, role: str, content: str, evidence: Optional[List[Dict]] = None, video_id: Optional[int] = None
+    user_id: int,
+    role: str,
+    content: str,
+    evidence: Optional[List[Dict]] = None,
+    video_id: Optional[int] = None,
+    folder_id: Optional[int] = None,
 ) -> None:
     """Appends a turn and prunes the workspace's history to the configured retention window."""
     keep = max(0, config.CHAT_HISTORY_TURNS) * 2
     evidence_json = json.dumps(evidence, ensure_ascii=False, separators=(",", ":")) if evidence else None
-    scope_condition = _chat_scope_condition(video_id)
-    scope_params = (video_id,) if video_id is not None else ()
+    scope_condition = _chat_scope_condition(video_id, folder_id)
+    scope_params = _chat_scope_params(video_id, folder_id)
     with connection() as conn:
         conn.execute(
-            "INSERT INTO chat_messages(user_id, video_id, role, content, evidence_json) VALUES (?, ?, ?, ?, ?)",
-            (user_id, video_id, role, content, evidence_json),
+            """
+            INSERT INTO chat_messages(user_id, folder_id, video_id, role, content, evidence_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, folder_id, video_id, role, content, evidence_json),
         )
         conn.execute(
             f"""
@@ -863,17 +905,24 @@ def record_chat_message(
     message = {"role": role, "content": content}
     if evidence:
         message["evidence"] = evidence
-    chat_cache.append_recent(user_id, message, max_messages=keep)
+    if folder_id is None and video_id is None:
+        chat_cache.append_recent(user_id, message, max_messages=keep)
 
 
-def recent_chat_history(user_id: int, *, include_evidence: bool = False, video_id: Optional[int] = None) -> List[Dict]:
+def recent_chat_history(
+    user_id: int,
+    *,
+    include_evidence: bool = False,
+    video_id: Optional[int] = None,
+    folder_id: Optional[int] = None,
+) -> List[Dict]:
     """Returns this workspace's last CHAT_HISTORY_TURNS turns in chronological order."""
     limit = max(0, config.CHAT_HISTORY_TURNS) * 2
     if limit == 0:
         return []
-    scope_condition = _chat_scope_condition(video_id)
-    scope_params = (video_id,) if video_id is not None else ()
-    if not include_evidence:
+    scope_condition = _chat_scope_condition(video_id, folder_id)
+    scope_params = _chat_scope_params(video_id, folder_id)
+    if not include_evidence and video_id is None and folder_id is None:
         cached = chat_cache.get_recent(user_id, include_evidence=False)
         if cached is not None:
             return cached
@@ -897,7 +946,7 @@ def recent_chat_history(user_id: int, *, include_evidence: bool = False, video_i
             except (TypeError, ValueError, json.JSONDecodeError):
                 item["evidence"] = []
         history.append(item)
-    if not include_evidence:
+    if not include_evidence and video_id is None and folder_id is None:
         chat_cache.set_recent(user_id, [{"role": item["role"], "content": item["content"]} for item in history])
     return history
 
@@ -914,6 +963,7 @@ def _chat_message_item(row: Dict) -> Dict:
         evidence = []
     return {
         "id": row["id"],
+        "folder_id": row["folder_id"],
         "video_id": row["video_id"],
         "role": row["role"],
         "content": row["content"],
@@ -922,18 +972,24 @@ def _chat_message_item(row: Dict) -> Dict:
     }
 
 
-def paged_chat_history(user_id: int, *, limit: int = 20, before_id: Optional[int] = None, video_id: Optional[int] = None) -> Dict:
+def paged_chat_history(
+    user_id: int,
+    *,
+    limit: int = 20,
+    before_id: Optional[int] = None,
+    video_id: Optional[int] = None,
+    folder_id: Optional[int] = None,
+) -> Dict:
     """Returns a cursor page for UI history; LLM context still uses recent_chat_history()."""
     page_size = min(max(limit, 1), 100)
-    scope_condition = _chat_scope_condition(video_id)
+    scope_condition = _chat_scope_condition(video_id, folder_id)
     query = """
-        SELECT id, video_id, role, content, evidence_json, created_at
+        SELECT id, folder_id, video_id, role, content, evidence_json, created_at
         FROM chat_messages
         WHERE user_id=? AND """ + scope_condition + """
     """
     params: List = [user_id]
-    if video_id is not None:
-        params.append(video_id)
+    params.extend(_chat_scope_params(video_id, folder_id))
     if before_id is not None:
         query += " AND id < ?"
         params.append(before_id)
@@ -1008,6 +1064,181 @@ def answer(question: str, evidence: List[Dict], history: Optional[List[Dict[str,
     )
     response.raise_for_status()
     return response.json()["result"]["message"]["content"]
+
+def _summary_payload(qa_text: str) -> Dict:
+    return {
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "아래 질문과 답변들을 종합해서 핵심 내용을 3~5문장으로 자연스럽게 요약하세요. "
+                    "목록이 아니라 하나의 문단으로 작성하세요."
+                ),
+            },
+            {"role": "user", "content": qa_text},
+        ],
+        "maxTokens": 400,
+        "temperature": 0.3,
+        "topP": 0.8,
+        "topK": 0,
+        "repetitionPenalty": 1.1,
+    }
+
+
+def summarize_chat_transcript(qa_pairs: List[Dict]) -> str:
+    if not qa_pairs:
+        return "요약할 대화 내용이 없습니다."
+    qa_text = "\n\n".join(f"질문: {pair['question']}\n답변: {pair['answer']}" for pair in qa_pairs)
+    if config.CHAT_PROVIDER == "mock":
+        return "로컬 테스트 모드 요약본입니다. 실제 CLOVA 연결 시 대화 내용을 종합한 요약이 표시됩니다."
+    if config.CHAT_PROVIDER != "clova":
+        raise RuntimeError("CHAT_PROVIDER must be mock or clova")
+    if not config.CLOVASTUDIO_API_KEY:
+        raise RuntimeError("CLOVASTUDIO_API_KEY is required for CHAT_PROVIDER=clova")
+    response = httpx.post(
+        "https://clovastudio.stream.ntruss.com/v3/chat-completions/" + config.CLOVA_MODEL,
+        headers=_chat_headers(),
+        json=_summary_payload(qa_text),
+        timeout=90,
+    )
+    response.raise_for_status()
+    return response.json()["result"]["message"]["content"]
+
+
+def _export_data(
+    user_id: int, video_id: Optional[int], message_ids: Optional[List[int]]
+) -> "tuple[str, List[Dict]]":
+    """Returns (title, qa_pairs) scoped to one video (or the whole workspace) and
+    filtered to the selected question turns when message_ids is given."""
+    if video_id is not None:
+        with connection() as conn:
+            video_row = conn.execute("SELECT title FROM videos WHERE id=?", (video_id,)).fetchone()
+        title = video_row["title"] if video_row else "선택한 영상"
+        scope_sql = "video_id=?"
+        scope_params: tuple = (video_id,)
+    else:
+        title = "전체 대화"
+        scope_sql = "1=1"
+        scope_params = ()
+
+    with connection() as conn:
+        rows = conn.execute(
+            f"SELECT id, role, content FROM chat_messages WHERE user_id=? AND {scope_sql} ORDER BY id ASC",
+            (user_id, *scope_params),
+        ).fetchall()
+
+    wanted_ids = set(message_ids) if message_ids else None
+    qa_pairs: List[Dict] = []
+    pending_question: Optional[str] = None
+    pending_question_id: Optional[int] = None
+    for row in rows:
+        if row["role"] == "user":
+            pending_question = row["content"]
+            pending_question_id = row["id"]
+        elif pending_question is not None:
+            if wanted_ids is None or pending_question_id in wanted_ids:
+                qa_pairs.append({"question": pending_question, "answer": row["content"]})
+            pending_question = None
+            pending_question_id = None
+    return title, qa_pairs
+
+
+def export_chat_transcript_txt(
+    user_id: int, video_id: Optional[int] = None, message_ids: Optional[List[int]] = None
+) -> str:
+    title, qa_pairs = _export_data(user_id, video_id, message_ids)
+    divider = "-" * 20
+    lines = [title, "", divider, "", summarize_chat_transcript(qa_pairs), "", divider, ""]
+    for index, pair in enumerate(qa_pairs, start=1):
+        lines.append(f"질문 {index}. {pair['question']}")
+        lines.append(f"답변 {index}. {pair['answer']}")
+        if index != len(qa_pairs):
+            lines.append("")
+            lines.append(divider)
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+_PDF_FONT_NAME: Optional[str] = None
+
+
+def _pdf_font_path() -> str:
+    candidates = [
+        config.PDF_FONT_PATH,
+        r"C:\Windows\Fonts\malgun.ttf",
+        "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansKR-Regular.otf",
+    ]
+    for path in candidates:
+        if path and Path(path).exists():
+            return path
+    raise RuntimeError(
+        "PDF에 사용할 한글 폰트를 찾을 수 없습니다. PDF_FONT_PATH 환경변수에 TTF 폰트 경로를 설정하세요."
+    )
+
+
+def _ensure_pdf_font() -> str:
+    global _PDF_FONT_NAME
+    if _PDF_FONT_NAME is None:
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+
+        pdfmetrics.registerFont(TTFont("ExportKorean", _pdf_font_path()))
+        _PDF_FONT_NAME = "ExportKorean"
+    return _PDF_FONT_NAME
+
+
+def _pdf_escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br/>")
+
+
+def export_chat_transcript_pdf(
+    user_id: int, video_id: Optional[int] = None, message_ids: Optional[List[int]] = None
+) -> bytes:
+    import io
+
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer
+
+    title, qa_pairs = _export_data(user_id, video_id, message_ids)
+    summary = summarize_chat_transcript(qa_pairs)
+    font_name = _ensure_pdf_font()
+
+    title_style = ParagraphStyle("Title", fontName=font_name, fontSize=18, leading=24, alignment=TA_LEFT)
+    body_style = ParagraphStyle("Body", fontName=font_name, fontSize=11, leading=17)
+    question_style = ParagraphStyle("Question", fontName=font_name, fontSize=11, leading=17, spaceBefore=10)
+    answer_style = ParagraphStyle("Answer", fontName=font_name, fontSize=11, leading=17, spaceAfter=4)
+
+    story = [
+        Paragraph(_pdf_escape(title), title_style),
+        HRFlowable(width="100%", thickness=1, color="#333333", spaceBefore=4, spaceAfter=10),
+        Paragraph(_pdf_escape(summary), body_style),
+        Spacer(1, 8 * mm),
+        HRFlowable(width="100%", thickness=1, color="#333333", spaceBefore=4, spaceAfter=10),
+    ]
+    if not qa_pairs:
+        story.append(Paragraph("내보낼 대화 내용이 없습니다.", body_style))
+    for index, pair in enumerate(qa_pairs, start=1):
+        story.append(Paragraph(f"질문 {index}. " + _pdf_escape(pair["question"]), question_style))
+        story.append(Paragraph(f"답변 {index}. " + _pdf_escape(pair["answer"]), answer_style))
+        if index != len(qa_pairs):
+            story.append(HRFlowable(width="100%", thickness=0.5, color="#999999", spaceBefore=6, spaceAfter=6))
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        topMargin=20 * mm,
+        bottomMargin=20 * mm,
+        leftMargin=20 * mm,
+        rightMargin=20 * mm,
+    )
+    doc.build(story)
+    return buffer.getvalue()
 
 def _common_prefix_length(a: str, b: str) -> int:
     length = min(len(a), len(b))

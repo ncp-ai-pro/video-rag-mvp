@@ -111,7 +111,12 @@ export default function WorkspacePage() {
           </section>
 
           <section className="order-1 flex min-h-0 flex-1 flex-col overflow-hidden md:order-2">
-            <ChatPanel chat={chat} videoTitle={selectedVideo?.title ?? null} onError={handleError} />
+            <ChatPanel
+              chat={chat}
+              videoId={selectedVideo?.id ?? null}
+              videoTitle={selectedVideo?.title ?? null}
+              onError={handleError}
+            />
           </section>
 
           <section className="order-3 flex h-[34vh] shrink-0 flex-col overflow-hidden border-t border-border/60 md:h-auto md:w-[340px] md:shrink-0 md:border-l md:border-t-0">
