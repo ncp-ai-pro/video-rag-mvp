@@ -12,6 +12,7 @@ on:
       - "Dockerfile"
       - "compose.yml"
       - "compose.local.yml"
+      - "deploy/yt-rag-app/**"
       - ".github/workflows/ci-app.yml"
   pull_request:
     branches: [main]
@@ -23,6 +24,7 @@ on:
       - "Dockerfile"
       - "compose.yml"
       - "compose.local.yml"
+      - "deploy/yt-rag-app/**"
       - ".github/workflows/ci-app.yml"
 
 permissions:
