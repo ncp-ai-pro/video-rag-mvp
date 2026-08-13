@@ -190,6 +190,11 @@ function Sidebar({
           style={
             {
               "--sidebar-width": SIDEBAR_WIDTH_MOBILE,
+              // 데스크톱 fixed 사이드바와 마찬가지로, 전역 헤더(h-14) 아래부터 슬라이드되도록 오프셋을 준다.
+              // (data-[side=left]:inset-y-0는 top/bottom을 0으로 고정하는데, top+height를 지정하면
+              // 스펙상 bottom은 무시되고 top+height 기준으로 계산된다.)
+              top: "3.5rem",
+              height: "calc(100% - 3.5rem)",
             } as React.CSSProperties
           }
           side={side}

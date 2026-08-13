@@ -84,3 +84,8 @@ export async function addChannelSource(folderId: number, url: string, name?: str
 export async function scanChannelSource(folderId: number, sourceId: number) {
   return post<JobAccepted>(`/folders/${folderId}/channel-sources/${sourceId}/scan`);
 }
+
+// 폴더를 삭제한다. 폴더 안 영상·후보·채널 소스도 함께 삭제된다(되돌릴 수 없음).
+export async function deleteFolder(folderId: number) {
+  return request<void>(`/folders/${folderId}`, { method: "DELETE" });
+}

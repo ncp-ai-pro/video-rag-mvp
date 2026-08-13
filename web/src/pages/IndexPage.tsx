@@ -112,7 +112,7 @@ export default function IndexPage() {
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto scroll-smooth">
+    <div id="page-top" className="min-h-0 flex-1 overflow-y-auto scroll-smooth">
       {/* 히어로: min-height는 lg 이상에서만 강제한다. 좁은 화면은 폼 + 플로우 미리보기가
           세로로 쌓이며 콘텐츠 높이만큼만 차지해, 스크롤 힌트와 겹치는 일이 없다. */}
       <section className="relative flex items-center px-4 py-16 lg:min-h-[calc(100dvh-3.5rem)]">
@@ -122,11 +122,11 @@ export default function IndexPage() {
               YouTube 영상으로 대화하기
             </h1>
             <p className="mx-auto mt-4 max-w-md text-muted-foreground lg:mx-0">
-              영상 링크를 넣으면 폴더가 자동으로 만들어지고, 자막을 분석해 AI에게 질문할 수 있습니다.
+              영상 링크를 넣으면 폴더가 자동으로 만들어지고, 자막을 분석해
+              AI에게 질문할 수 있습니다.
             </p>
 
             <form
-              id="start-form"
               onSubmit={submit}
               className="mx-auto mt-8 flex max-w-xl scroll-mt-24 items-center gap-2 rounded-xl border border-border/70 bg-card/60 p-2 shadow-lg lg:mx-0"
             >
@@ -139,7 +139,11 @@ export default function IndexPage() {
                 className="border-0 bg-transparent shadow-none focus-visible:ring-0"
                 onChange={(event) => setUrl(event.target.value)}
               />
-              <Button type="submit" size="lg" disabled={startMutation.isPending || !url.trim()}>
+              <Button
+                type="submit"
+                size="lg"
+                disabled={startMutation.isPending || !url.trim()}
+              >
                 {startMutation.isPending ? "시작 중…" : "분석 시작"}
               </Button>
             </form>
@@ -159,7 +163,10 @@ export default function IndexPage() {
                 폴더 전환은 작업 환경(Sidebar)의 일이라, 여기선 진입 버튼 하나만 둔다. */}
             {folders.length > 0 && (
               <div className="mt-8">
-                <Button variant="secondary" onClick={() => navigate("/workspace")}>
+                <Button
+                  variant="secondary"
+                  onClick={() => navigate("/workspace")}
+                >
                   내 작업 환경 열기 <ArrowRight className="size-4" />
                 </Button>
               </div>
@@ -181,10 +188,15 @@ export default function IndexPage() {
       </section>
 
       {/* 페인포인트: 카드 그리드 대신 좌측 헤딩 + 우측 넘버링 리스트(비대칭)로 구성 */}
-      <section id="pain-points" className="scroll-mt-14 border-t border-border/60 bg-muted/20 px-4 py-20">
+      <section
+        id="pain-points"
+        className="scroll-mt-14 border-t border-border/60 bg-muted/20 px-4 py-20"
+      >
         <div className="mx-auto grid max-w-5xl gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)] lg:gap-16">
           <Reveal>
-            <p className="text-xs font-medium tracking-wide text-primary">흔한 상황</p>
+            <p className="text-xs font-medium tracking-wide text-primary">
+              흔한 상황
+            </p>
             <h2 className="mt-2 text-3xl font-bold tracking-tight text-balance sm:text-4xl">
               이런 적, 있지 않나요?
             </h2>
@@ -192,13 +204,17 @@ export default function IndexPage() {
           <ol className="flex flex-col">
             {PAIN_POINTS.map((point, index) => (
               <Reveal key={point.title} delay={index * 100}>
-                <li className={`flex gap-4 border-border/60 py-5 ${index !== 0 ? "border-t" : ""}`}>
+                <li
+                  className={`flex gap-4 border-border/60 py-5 ${index !== 0 ? "border-t" : ""}`}
+                >
                   <span className="font-mono text-sm text-muted-foreground/60">
                     {String(index + 1).padStart(2, "0")}
                   </span>
                   <div>
                     <p className="font-medium">{point.title}</p>
-                    <p className="mt-1.5 text-sm text-muted-foreground">{point.body}</p>
+                    <p className="mt-1.5 text-sm text-muted-foreground">
+                      {point.body}
+                    </p>
                   </div>
                 </li>
               </Reveal>
@@ -211,7 +227,9 @@ export default function IndexPage() {
       <section className="border-t border-border/60 px-4 py-20">
         <div className="mx-auto max-w-5xl text-center">
           <Reveal>
-            <p className="text-xs font-medium tracking-wide text-primary">이용 방법</p>
+            <p className="text-xs font-medium tracking-wide text-primary">
+              이용 방법
+            </p>
             <h2 className="mt-2 text-3xl font-bold tracking-tight text-balance sm:text-4xl">
               영상은 어떻게 넣어도 상관없어요
             </h2>
@@ -237,7 +255,9 @@ export default function IndexPage() {
       <section className="border-t border-border/60 bg-muted/20 px-4 py-20">
         <div className="mx-auto max-w-5xl text-center">
           <Reveal>
-            <p className="text-xs font-medium tracking-wide text-primary">제공 기능</p>
+            <p className="text-xs font-medium tracking-wide text-primary">
+              제공 기능
+            </p>
             <h2 className="mt-2 text-3xl font-bold tracking-tight text-balance sm:text-4xl">
               영상 하나면, 답변 준비 끝
             </h2>
@@ -264,7 +284,9 @@ export default function IndexPage() {
                     </div>
                     <div>
                       <p className="font-medium">{title}</p>
-                      <p className="mt-1 text-sm text-muted-foreground">{body}</p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {body}
+                      </p>
                     </div>
                   </CardContent>
                 </Card>
@@ -281,11 +303,20 @@ export default function IndexPage() {
             지금 바로 시작하세요
           </h2>
           <p className="mx-auto mt-3 max-w-md text-muted-foreground">
-            영상 하나로 폴더를 시작합니다. 이후 작업 환경에서 링크를 더 추가하거나
-            채널을 연결해 자동으로 모을 수 있습니다.
+            영상 하나로 폴더를 시작합니다. 이후 작업 환경에서 링크를 더
+            추가하거나 채널을 연결해 자동으로 모을 수 있습니다.
           </p>
-          <Button asChild size="lg" className="mt-8">
-            <a href="#start-form">지금 시작하기</a>
+          <Button
+            size="lg"
+            className="mt-8"
+            onClick={() => {
+              document.getElementById("page-top")?.scrollTo({
+                top: 0,
+                behavior: "smooth",
+              });
+            }}
+          >
+            지금 시작하기
           </Button>
         </Reveal>
       </section>

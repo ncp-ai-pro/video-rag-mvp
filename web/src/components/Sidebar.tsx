@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus } from 'lucide-react'
+import { MoreVertical, Pencil, Plus, Trash2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -10,21 +10,30 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import {
   Sidebar as SidebarShell,
   SidebarContent,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar'
 import { useFolders } from '@/hooks/queries/folder/use-folders'
 import { useCreateFolder } from '@/hooks/mutations/folder/use-create-folder'
+import { useDeleteFolder } from '@/hooks/mutations/folder/use-delete-folder'
+import { useRenameFolder } from '@/hooks/mutations/folder/use-rename-folder'
 
 interface Props {
   selectedFolderId: number | null
-  onSelectFolder: (folderId: number) => void
+  onSelectFolder: (folderId: number | null) => void
   onError: (message: string) => void
 }
 
@@ -39,9 +48,17 @@ export function Sidebar({ selectedFolderId, onSelectFolder, onError }: Props) {
     onError: () => onError('폴더 생성에 실패했습니다.'),
     onSettled: (folder) => onSelectFolder(folder.id),
   })
+  const deleteFolderMutation = useDeleteFolder({
+    onError: () => onError('폴더 삭제에 실패했습니다.'),
+  })
+  const renameFolderMutation = useRenameFolder({
+    onError: () => onError('폴더 이름을 바꾸지 못했습니다.'),
+  })
 
   const [name, setName] = useState('')
   const [addOpen, setAddOpen] = useState(false)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [renameTarget, setRenameTarget] = useState<{ id: number; name: string } | null>(null)
 
   // 이름만으로 빠르게 만든다. 영상은 만든 직후 폴더 안 "영상 추가" 다이얼로그에서 넣는다.
   const addFolder = (event: React.FormEvent) => {
@@ -52,6 +69,30 @@ export function Sidebar({ selectedFolderId, onSelectFolder, onError }: Props) {
         setName('')
         setAddOpen(false)
       },
+    })
+  }
+
+  const renameFolder = (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!renameTarget || !renameTarget.name.trim()) return
+    renameFolderMutation.mutate(
+      { folderId: renameTarget.id, name: renameTarget.name.trim() },
+      { onSuccess: () => setRenameTarget(null) },
+    )
+  }
+
+  // 삭제된 폴더가 선택 중이었으면 남은 폴더 중 하나로 옮기고, 없으면 선택을 비운다.
+  const handleDelete = (folderId: number) => {
+    if (!window.confirm('이 폴더와 안의 모든 영상을 삭제할까요? 되돌릴 수 없습니다.')) return
+    setDeletingId(folderId)
+    deleteFolderMutation.mutate(folderId, {
+      onSuccess: () => {
+        if (folderId === selectedFolderId) {
+          const next = folders.find((folder) => folder.id !== folderId)
+          onSelectFolder(next ? next.id : null)
+        }
+      },
+      onSettled: () => setDeletingId(null),
     })
   }
 
@@ -117,11 +158,60 @@ export function Sidebar({ selectedFolderId, onSelectFolder, onError }: Props) {
                   </span>
                   <span className="truncate">{folder.name}</span>
                 </SidebarMenuButton>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <SidebarMenuAction
+                      showOnHover
+                      disabled={deletingId === folder.id}
+                      aria-label={`${folder.name} 더보기`}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <MoreVertical />
+                    </SidebarMenuAction>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent side="right" align="start">
+                    <DropdownMenuItem
+                      onClick={() => setRenameTarget({ id: folder.id, name: folder.name })}
+                    >
+                      <Pencil /> 이름 바꾸기
+                    </DropdownMenuItem>
+                    <DropdownMenuItem variant="destructive" onClick={() => handleDelete(folder.id)}>
+                      <Trash2 /> 삭제
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </SidebarMenuItem>
             ))
           )}
         </SidebarMenu>
       </SidebarContent>
+
+      <Dialog open={renameTarget !== null} onOpenChange={(open) => !open && setRenameTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>폴더 이름 바꾸기</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={renameFolder} className="space-y-2">
+            <Input
+              required
+              autoFocus
+              value={renameTarget?.name ?? ''}
+              placeholder="폴더 이름"
+              aria-label="새 폴더 이름"
+              onChange={(event) =>
+                setRenameTarget((prev) => (prev ? { ...prev, name: event.target.value } : prev))
+              }
+            />
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={renameFolderMutation.isPending || !renameTarget?.name.trim()}
+            >
+              {renameFolderMutation.isPending ? '저장 중…' : '저장'}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
     </SidebarShell>
   )
 }
