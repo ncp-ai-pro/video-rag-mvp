@@ -30,6 +30,13 @@ export default defineConfig({
         target: CHAT_TARGET,
         changeOrigin: true,
       },
+      // 폴더 스코프 채팅(streamFolderChat 등)은 CHAT_BASE가 빈 문자열이라 접두사 없이
+      // /folders/{id}/chat/*로 요청한다. folders_router가 Chat 서버(8001)에도 그대로
+      // mount돼 있어서 여기로 보내면 된다.
+      "/folders": {
+        target: CHAT_TARGET,
+        changeOrigin: true,
+      },
     },
   },
 });

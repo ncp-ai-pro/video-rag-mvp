@@ -22,6 +22,19 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
+    # /runtime-config.js is served by the API backend at its root path (not under
+    # /api), so it needs its own proxy rule. Without this it falls through to the
+    # SPA fallback above and the browser gets index.html back for a <script src>
+    # request, which fails with "Unexpected token '<'".
+    location = /runtime-config.js {
+        proxy_pass ${BACKEND_INGRESS_ORIGIN}/runtime-config.js;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Cache-Control "no-store" always;
+    }
+
     # Backend entrypoint. In production this points to the NKS private ALB
     # created by the NKS Gateway API Adapter.
     #
