@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { Link2, MessageCircle, Play, Plus, Rss } from "lucide-react";
+import { Link2, MessageCircle, Play, Plus, RotateCw, Rss } from "lucide-react";
 import { toast } from "sonner";
 
 import { StatusBadge } from "@/components/StatusBadge";
@@ -17,13 +17,15 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useFolderVideos } from "@/hooks/queries/folder/use-folder-videos";
 import { useFolderCandidates } from "@/hooks/queries/folder/use-folder-candidates";
+import { useChannelSources } from "@/hooks/queries/folder/use-channel-sources";
 import { useAddFolderVideo } from "@/hooks/mutations/folder/use-add-folder-video";
 import { useAnalyzeCandidate } from "@/hooks/mutations/folder/use-analyze-candidate";
 import { useAddChannelSource } from "@/hooks/mutations/folder/use-add-channel-source";
+import { useScanChannelSource } from "@/hooks/mutations/folder/use-scan-channel-source";
 import { useUploadKakaoImport } from "@/hooks/mutations/folder/use-upload-kakao-import";
-import { formatUploadDate } from "@/lib/format";
+import { channelSourceLabel, formatUploadDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { FolderCandidate, FolderVideo } from "@/api/types";
+import type { ChannelSource, FolderCandidate, FolderVideo } from "@/api/types";
 
 interface Props {
   selectedFolderId: number | null;
@@ -112,6 +114,47 @@ function CandidateRow({
   );
 }
 
+function ChannelSourceRow({
+  source,
+  scanning,
+  onScan,
+}: {
+  source: ChannelSource;
+  scanning: boolean;
+  onScan: () => void;
+}) {
+  return (
+    <li className="flex items-start justify-between gap-2 border-b border-border/40 px-3 py-2.5">
+      <div className="min-w-0">
+        <p className="truncate text-sm">{source.name ?? channelSourceLabel(source.url)}</p>
+        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+          {/* last_scanned_at은 백엔드가 스캔 완료 후에도 안 채워줘서(항상 null), 실제로 스캔이
+              됐는지는 candidate_count로 판단한다 — 후보가 있는데 "아직 스캔하지 않음"이라고
+              나오면 헷갈리니까. */}
+          {scanning
+            ? "스캔 중…"
+            : source.last_scanned_at
+              ? `${new Date(source.last_scanned_at).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" })} 스캔 · 후보 ${source.candidate_count}개`
+              : source.candidate_count > 0
+                ? `스캔됨 · 후보 ${source.candidate_count}개`
+                : "아직 스캔하지 않음"}
+        </p>
+      </div>
+      <Button
+        type="button"
+        size="xs"
+        variant="outline"
+        disabled={scanning}
+        onClick={onScan}
+        className="shrink-0"
+      >
+        <RotateCw className={cn("size-3", scanning && "animate-spin")} />
+        {scanning ? "스캔 중…" : "다시 스캔"}
+      </Button>
+    </li>
+  );
+}
+
 /**
  * 폴더 안 영상: 위쪽은 검색 + [폴더 영상]/[수집 후보] 두 섹션(탭 전환 없이 한 화면에서 스크롤).
  * "영상 추가"(URL 직접 추가 + 채널 연결 + 카카오톡 내보내기 업로드)는 다이얼로그로 뺐다(작업공간 연결과 같은 패턴).
@@ -128,6 +171,7 @@ export function FolderVideos({
     useFolderVideos(selectedFolderId);
   const { data: candidates = [], isLoading: candidatesLoading } =
     useFolderCandidates(selectedFolderId);
+  const { data: channelSources = [] } = useChannelSources(selectedFolderId);
 
   const addVideoMutation = useAddFolderVideo(selectedFolderId, {
     onError: () => onError("영상 추가에 실패했습니다."),
@@ -137,6 +181,9 @@ export function FolderVideos({
   });
   const addChannelSourceMutation = useAddChannelSource(selectedFolderId, {
     onError: () => onError("채널 연결에 실패했습니다."),
+  });
+  const scanChannelSourceMutation = useScanChannelSource(selectedFolderId, {
+    onError: () => onError("다시 스캔하지 못했습니다."),
   });
   const uploadKakaoMutation = useUploadKakaoImport(selectedFolderId, {
     onError: (error) =>
@@ -150,6 +197,7 @@ export function FolderVideos({
   const [analyzingCandidateId, setAnalyzingCandidateId] = useState<
     number | null
   >(null);
+  const [scanningSourceId, setScanningSourceId] = useState<number | null>(null);
   const kakaoFileInputRef = useRef<HTMLInputElement>(null);
 
   const filteredVideos = useMemo(() => {
@@ -179,6 +227,14 @@ export function FolderVideos({
     setAnalyzingCandidateId(candidate.id);
     analyzeCandidateMutation.mutate(candidate.id, {
       onSettled: () => setAnalyzingCandidateId(null),
+    });
+  };
+
+  const rescanChannelSource = (source: ChannelSource) => {
+    setScanningSourceId(source.id);
+    scanChannelSourceMutation.mutate(source.id, {
+      onSuccess: () => toast.success("다시 스캔을 등록했습니다. 잠시 후 수집 후보에 반영됩니다."),
+      onSettled: () => setScanningSourceId(null),
     });
   };
 
@@ -381,6 +437,24 @@ export function FolderVideos({
                   candidate={candidate}
                   adding={analyzingCandidateId === candidate.id}
                   onAdd={() => addCandidate(candidate)}
+                />
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {channelSources.length > 0 && (
+          <div>
+            <p className="bg-background/95 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground backdrop-blur">
+              연결된 채널 · {channelSources.length}
+            </p>
+            <ul>
+              {channelSources.map((source) => (
+                <ChannelSourceRow
+                  key={source.id}
+                  source={source}
+                  scanning={scanningSourceId === source.id}
+                  onScan={() => rescanChannelSource(source)}
                 />
               ))}
             </ul>
