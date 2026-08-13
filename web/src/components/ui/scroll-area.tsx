@@ -18,7 +18,11 @@ function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
-        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1"
+        // Radix가 내부 콘텐츠 래퍼에 display:table을 강제로 넣는데, 이 방식은 자식의
+        // "내용 자체 너비"에 맞춰 폭을 잡아서 truncate/flex-shrink가 있어도 뷰포트보다
+        // 넓어질 수 있다(안의 긴 텍스트가 화면 밖으로 밀려나 스크롤 없이 잘려 보임).
+        // display:block으로 되돌려서 우리가 준 너비(size-full)를 그대로 따르게 한다.
+        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 [&>div]:!block"
       >
         {children}
       </ScrollAreaPrimitive.Viewport>

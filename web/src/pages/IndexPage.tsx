@@ -1,7 +1,6 @@
 import { useRef, useState } from "react";
 import {
   ArrowRight,
-  ChevronDown,
   Clock,
   FolderKanban,
   Link2,
@@ -222,13 +221,18 @@ export default function IndexPage() {
         </div>
 
         {/* 스크롤 유도 힌트. lg 이상에서만 보여준다 — 모바일은 히어로 높이가 콘텐츠에 맞춰져
-            굳이 스크롤을 유도할 필요가 없고, 겹침 위험만 생긴다. 장식이라 스크린리더에는 숨긴다. */}
+            굳이 스크롤을 유도할 필요가 없고, 겹침 위험만 생긴다.
+            화살표 아이콘 하나로는 존재감이 약해서, 랜딩페이지에 흔히 쓰는 "마우스 스크롤" 모양으로
+            바꿨다 — 휠 모양 안에서 점이 아래로 흘러내리는 애니메이션(index.css의 scroll-wheel-dot)이
+            "여기서 스크롤하세요"라는 뜻을 아이콘 자체로 바로 전달한다. */}
         <a
           href="#pain-points"
-          aria-hidden="true"
-          className="absolute inset-x-0 bottom-6 hidden animate-bounce justify-center text-muted-foreground transition-colors hover:text-foreground lg:flex"
+          className="absolute inset-x-0 bottom-6 hidden flex-col items-center gap-3 text-muted-foreground transition-colors hover:text-foreground lg:flex"
         >
-          <ChevronDown className="size-5" />
+          <span className="text-xs font-medium tracking-wide">스크롤해서 더 알아보기</span>
+          <span className="flex h-9 w-5.5 justify-center rounded-full border-2 border-current pt-1.5">
+            <span className="size-1.5 rounded-full bg-current [animation:scroll-wheel-dot_1.8s_ease-in-out_infinite]" />
+          </span>
         </a>
       </section>
 
