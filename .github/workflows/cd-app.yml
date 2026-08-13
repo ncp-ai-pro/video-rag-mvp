@@ -10,6 +10,7 @@ on:
       - "requirements.txt"
       - "pyproject.toml"
       - "Dockerfile"
+      - "deploy/yt-rag-app/**"
       - ".github/workflows/cd-app.yml"
 
 permissions:
@@ -105,7 +106,10 @@ jobs:
           PY
           )"
 
-          git clone "${auth_repo_url}" manifest-repo
+          git clone --branch main "${auth_repo_url}" manifest-repo
+          mkdir -p manifest-repo/deploy/yt-rag-app
+          find deploy/yt-rag-app -maxdepth 1 -type f -name "*.yml" -exec cp {} manifest-repo/deploy/yt-rag-app/ \;
+
           cd manifest-repo
 
           git config user.name "github-actions[bot]"
@@ -132,12 +136,12 @@ jobs:
               path.write_text(updated)
           PY
 
-          git diff -- deploy/yt-rag-app/api-deployment.yml deploy/yt-rag-app/chat-deployment.yml deploy/yt-rag-app/worker-deployment.yml
+          git diff -- deploy/yt-rag-app
 
           if git diff --quiet; then
             echo "Manifest image tag is already ${APP_IMAGE_TAG}; skipping SourceCommit push."
           else
-            git add deploy/yt-rag-app/api-deployment.yml deploy/yt-rag-app/chat-deployment.yml deploy/yt-rag-app/worker-deployment.yml
+            git add deploy/yt-rag-app
             git commit -m "Deploy yt-rag-app ${APP_IMAGE_TAG}"
             git push origin HEAD:main
           fi

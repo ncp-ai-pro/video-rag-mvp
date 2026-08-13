@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat
+  namespace: video-rag
+  labels:
+    app.kubernetes.io/name: yt-rag-app
+    app.kubernetes.io/component: chat
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: yt-rag-app
+      app.kubernetes.io/component: chat
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: yt-rag-app
+        app.kubernetes.io/component: chat
+    spec:
+      imagePullSecrets:
+        - name: dockerhub-registry
+      containers:
+        - name: chat
+          image: kimgt2828/yt-rag-app:prod
+          imagePullPolicy: Always
+          command:
+            - uvicorn
+            - app.chat_main:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+            - --proxy-headers
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: yt-rag-app-config
+            - secretRef:
+                name: yt-rag-app-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+

@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: video-rag
+  labels:
+    app.kubernetes.io/name: yt-rag-app
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: yt-rag-app
+      app.kubernetes.io/component: worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: yt-rag-app
+        app.kubernetes.io/component: worker
+    spec:
+      imagePullSecrets:
+        - name: dockerhub-registry
+      containers:
+        - name: worker
+          image: kimgt2828/yt-rag-app:prod
+          imagePullPolicy: Always
+          command:
+            - python
+            - -m
+            - app.worker
+          envFrom:
+            - configMapRef:
+                name: yt-rag-app-config
+            - secretRef:
+                name: yt-rag-app-secret
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+
