@@ -192,7 +192,7 @@ export interface FolderCreateResponse {
 export interface FolderVideo extends Video {
   folder_id: number;
   /** 이 영상이 폴더에 들어온 경로. */
-  source: "direct" | "candidate" | "channel_scan" | "manual";
+  source: "direct" | "candidate" | "channel_scan" | "manual" | "kakao_import";
   source_label: string | null;
   evidence_count: number;
   added_at: string;
@@ -233,3 +233,31 @@ export interface ChannelSource {
   last_scanned_at: string | null;
   candidate_count: number;
 }
+
+/** POST /folders/{id}/imports/kakao 아이템 하나. attached는 분석 job 없이 영상만 폴더에 들어간 경우다. */
+export type KakaoImportItemStatus = "attached" | "queued" | "running" | "succeeded" | "ready";
+
+export interface KakaoImportItem {
+  video_id: number;
+  provider: string;
+  provider_video_id: string;
+  canonical_url: string;
+  start_seconds_hint: number | null;
+  status: KakaoImportItemStatus;
+  job: JobAccepted | null;
+}
+
+/** POST /folders/{id}/imports/kakao 응답. */
+export interface KakaoImportResponse {
+  batch_id: number;
+  folder_id: number;
+  filename: string;
+  artifact_object_key: string;
+  total_urls: number;
+  unique_videos: number;
+  duplicates: number;
+  queued_jobs: number;
+  items: KakaoImportItem[];
+}
+
+export type KakaoImportPriority = "bulk" | "normal" | "manual" | "ultra";

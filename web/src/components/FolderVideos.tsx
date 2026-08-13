@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
-import { Link2, Play, Plus, Rss } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
+import { Link2, MessageCircle, Play, Plus, Rss } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { StatusBadge } from '@/components/StatusBadge'
 import { Button } from '@/components/ui/button'
@@ -19,6 +20,7 @@ import { useFolderCandidates } from '@/hooks/queries/folder/use-folder-candidate
 import { useAddFolderVideo } from '@/hooks/mutations/folder/use-add-folder-video'
 import { useAnalyzeCandidate } from '@/hooks/mutations/folder/use-analyze-candidate'
 import { useAddChannelSource } from '@/hooks/mutations/folder/use-add-channel-source'
+import { useUploadKakaoImport } from '@/hooks/mutations/folder/use-upload-kakao-import'
 import { formatUploadDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { FolderCandidate, FolderVideo } from '@/api/types'
@@ -92,7 +94,7 @@ function CandidateRow({
 
 /**
  * 폴더 안 영상: 위쪽은 검색 + [폴더 영상]/[수집 후보] 두 섹션(탭 전환 없이 한 화면에서 스크롤).
- * "영상 추가"(URL 직접 추가 + 채널 연결)는 다이얼로그로 뺐다(작업공간 연결과 같은 패턴).
+ * "영상 추가"(URL 직접 추가 + 채널 연결 + 카카오톡 내보내기 업로드)는 다이얼로그로 뺐다(작업공간 연결과 같은 패턴).
  * folder-first-api-spec.md 기준: 폴더 영상과 수집 후보는 서로 다른 API(폴더 영상 vs 후보)다 —
  * 후보는 아직 실제 영상이 아니라서 클릭 대신 "분석 후 추가" 버튼으로만 폴더에 들어온다.
  */
@@ -109,12 +111,16 @@ export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo,
   const addChannelSourceMutation = useAddChannelSource(selectedFolderId, {
     onError: () => onError('채널 연결에 실패했습니다.'),
   })
+  const uploadKakaoMutation = useUploadKakaoImport(selectedFolderId, {
+    onError: (error) => onError(error.message || '카카오톡 파일 업로드에 실패했습니다.'),
+  })
 
   const [filterText, setFilterText] = useState('')
   const [addOpen, setAddOpen] = useState(false)
   const [newVideoUrl, setNewVideoUrl] = useState('')
   const [channelUrl, setChannelUrl] = useState('')
   const [analyzingCandidateId, setAnalyzingCandidateId] = useState<number | null>(null)
+  const kakaoFileInputRef = useRef<HTMLInputElement>(null)
 
   const filteredVideos = useMemo(() => {
     const text = filterText.trim().toLowerCase()
@@ -144,6 +150,22 @@ export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo,
     })
   }
 
+  // 대량 import라 기본 priority는 "bulk" 권장(백엔드 안내). 업로드 후 요약(총/신규/중복/분석 등록)을 토스트로 알린다.
+  const uploadKakaoFile = (file: File) => {
+    if (selectedFolderId === null) return
+    uploadKakaoMutation.mutate(
+      { file, analyze: true, priority: 'bulk' },
+      {
+        onSuccess: (result) => {
+          toast.success(
+            `카카오톡 링크 ${result.total_urls}개 중 새 영상 ${result.unique_videos}개, 중복 ${result.duplicates}개 — 분석 ${result.queued_jobs}건 등록했습니다.`,
+          )
+        },
+      },
+    )
+    if (kakaoFileInputRef.current) kakaoFileInputRef.current.value = ''
+  }
+
   if (selectedFolderId === null) {
     return (
       <div className="flex h-full items-center justify-center p-4 text-xs text-muted-foreground">
@@ -169,13 +191,15 @@ export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo,
               <Plus />
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-2xl">
+          <DialogContent className="sm:max-w-3xl">
             <DialogHeader>
               <DialogTitle>영상 추가</DialogTitle>
-              <DialogDescription>URL을 직접 넣거나, 채널을 연결해서 새 영상을 자동으로 수집합니다.</DialogDescription>
+              <DialogDescription>
+                URL을 직접 넣거나, 채널을 연결하거나, 카카오톡 채팅 내보내기 파일로 한꺼번에 영상을 모읍니다.
+              </DialogDescription>
             </DialogHeader>
 
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <div className="space-y-3 rounded-xl border border-border/60 bg-card/40 p-4">
                 <div className="flex items-center gap-2.5">
                   <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary">
@@ -235,6 +259,37 @@ export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo,
                     {addChannelSourceMutation.isPending ? '연결 중…' : '연결'}
                   </Button>
                 </form>
+              </div>
+
+              <div className="space-y-3 rounded-xl border border-border/60 bg-card/40 p-4">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary">
+                    <MessageCircle className="size-4" />
+                  </span>
+                  <div>
+                    <p className="text-sm font-medium">카카오톡 내보내기 업로드</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      채팅방에서 내보낸 .txt 파일 속 YouTube 링크를 한꺼번에 모읍니다
+                    </p>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <input
+                    ref={kakaoFileInputRef}
+                    type="file"
+                    accept=".txt"
+                    aria-label="카카오톡 내보내기 파일"
+                    disabled={uploadKakaoMutation.isPending}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0]
+                      if (file) uploadKakaoFile(file)
+                    }}
+                    className="block w-full text-xs text-muted-foreground file:mr-2 file:rounded-md file:border-0 file:bg-primary/15 file:px-2.5 file:py-1.5 file:text-xs file:font-medium file:text-primary hover:file:bg-primary/25"
+                  />
+                  {uploadKakaoMutation.isPending && (
+                    <p className="text-[11px] text-muted-foreground">업로드하고 링크를 정리하는 중…</p>
+                  )}
+                </div>
               </div>
             </div>
           </DialogContent>
