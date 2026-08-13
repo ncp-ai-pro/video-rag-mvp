@@ -10,6 +10,9 @@ export interface Workspace {
 
 /** jobs.status와 동일한 어휘 */
 export type AnalysisStatus =
+  /** URL만 접수되고 Worker가 아직 yt-dlp로 metadata(제목·썸네일 등)를 못 가져온 상태.
+   *  title은 백엔드가 이미 "영상 정보를 가져오는 중" 같은 placeholder 문자열로 채워서 준다. */
+  | "metadata_pending"
   | "metadata_only"
   | "queued"
   | "running"
@@ -20,6 +23,7 @@ export type AnalysisStatus =
 
 /** services.ANALYSIS_MESSAGES의 key와 동일. 새 stage 추가 시 백엔드와 함께 갱신할 것. */
 export type AnalysisStage =
+  | "metadata_pending"
   | "metadata_only"
   | "queued"
   | "downloading_caption"
@@ -153,6 +157,9 @@ export const isAnalyzed = (status: AnalysisStatus) =>
 export const isAnalysisActive = (status: AnalysisStatus) =>
   status === "queued" || status === "running";
 
+/** metadata(제목·썸네일)조차 아직 없는, analysis 파이프라인 이전 단계. */
+export const isMetadataPending = (status: AnalysisStatus) => status === "metadata_pending";
+
 // --- folder-first-api-spec.md 기준 (백엔드 구현 중, docs/design/folder-first-api-spec.md 참고) ---
 
 /** GET /folders 항목. */
@@ -185,7 +192,7 @@ export interface FolderCreateResponse {
 export interface FolderVideo extends Video {
   folder_id: number;
   /** 이 영상이 폴더에 들어온 경로. */
-  source: "direct" | "candidate" | "channel_scan" | "manual";
+  source: "direct" | "candidate" | "channel_scan" | "manual" | "kakao_import";
   source_label: string | null;
   evidence_count: number;
   added_at: string;
@@ -226,3 +233,31 @@ export interface ChannelSource {
   last_scanned_at: string | null;
   candidate_count: number;
 }
+
+/** POST /folders/{id}/imports/kakao 아이템 하나. attached는 분석 job 없이 영상만 폴더에 들어간 경우다. */
+export type KakaoImportItemStatus = "attached" | "queued" | "running" | "succeeded" | "ready";
+
+export interface KakaoImportItem {
+  video_id: number;
+  provider: string;
+  provider_video_id: string;
+  canonical_url: string;
+  start_seconds_hint: number | null;
+  status: KakaoImportItemStatus;
+  job: JobAccepted | null;
+}
+
+/** POST /folders/{id}/imports/kakao 응답. */
+export interface KakaoImportResponse {
+  batch_id: number;
+  folder_id: number;
+  filename: string;
+  artifact_object_key: string;
+  total_urls: number;
+  unique_videos: number;
+  duplicates: number;
+  queued_jobs: number;
+  items: KakaoImportItem[];
+}
+
+export type KakaoImportPriority = "bulk" | "normal" | "manual" | "ultra";

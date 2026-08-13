@@ -1,4 +1,5 @@
-import { post, request } from "./client";
+import { ApiError, post, readErrorMessage, request } from "./client";
+import { API_BASE } from "@/lib/config";
 import type {
   CandidateAnalyzeResponse,
   ChannelSource,
@@ -7,6 +8,9 @@ import type {
   FolderCreateResponse,
   FolderVideo,
   JobAccepted,
+  KakaoImportPriority,
+  KakaoImportResponse,
+  Video,
 } from "./types";
 
 /**
@@ -42,11 +46,27 @@ export async function fetchFolderVideos(folderId: number) {
   return response.items;
 }
 
-// 폴더에 영상 URL을 직접 추가한다. analyze:true면 서버가 바로 분석 job도 등록한다.
+/**
+ * 폴더에 영상 URL을 직접 추가한다. analyze:true면 서버가 바로 분석 job도 등록한다.
+ * yt-dlp rate-limit으로 API가 바로 502 나는 걸 피하려고, 응답은 URL만 접수한 placeholder
+ * video일 수 있다(analysis_status: "metadata_pending", title은 안내 문구). Worker가 metadata를
+ * 채우고 나면 GET /folders/{id}/videos 재조회(폴링)로 실제 제목·썸네일이 반영된다.
+ */
 export async function addFolderVideo(folderId: number, url: string, analyze = true) {
   return post<{
-    video: { id: number; title: string; analysis_status: string };
-    folder_video: { folder_id: number; video_id: number; source: string; added_at: string };
+    video: Pick<
+      Video,
+      | "id"
+      | "platform_video_id"
+      | "title"
+      | "url"
+      | "thumbnail_url"
+      | "duration_seconds"
+      | "analysis_status"
+      | "analysis_stage"
+      | "analysis_message"
+    >;
+    folder_video: { folder_id: number; video_id: number; source: FolderVideo["source"] };
     job: JobAccepted | null;
   }>(`/folders/${folderId}/videos`, { url, analyze });
 }
@@ -88,4 +108,43 @@ export async function scanChannelSource(folderId: number, sourceId: number) {
 // 폴더를 삭제한다. 폴더 안 영상·후보·채널 소스도 함께 삭제된다(되돌릴 수 없음).
 export async function deleteFolder(folderId: number) {
   return request<void>(`/folders/${folderId}`, { method: "DELETE" });
+}
+
+/** 백엔드가 주는 detail 원문(영문)을 알려진 케이스만 한국어 안내로 바꾼다. 못 아는 detail은 그대로 보여준다. */
+const KAKAO_ERROR_MESSAGES: Record<string, string> = {
+  "filename is required": "파일명이 없습니다.",
+  "file is empty": "빈 파일입니다.",
+  "priority must be one of bulk, normal, manual, ultra": "priority 값이 올바르지 않습니다.",
+  "too many import requests": "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+  "same Kakao export is already being imported": "같은 파일이 이미 업로드 처리 중입니다. 잠시 후 다시 시도해 주세요.",
+  "folder not found": "폴더를 찾을 수 없습니다.",
+};
+
+/**
+ * 카카오톡 채팅 내보내기(.txt)를 업로드해서 안의 YouTube 링크들을 폴더에 영상으로 추가한다.
+ * 대량 import라 기본 priority는 "bulk"를 권장한다(개별 URL 추가는 addFolderVideo와 별개 경로).
+ * multipart/form-data라 client.ts의 request()(항상 application/json 헤더를 강제)를 못 쓰고
+ * 여기서만 직접 fetch한다 — FormData를 body로 주면 브라우저가 boundary를 포함해 Content-Type을
+ * 알아서 설정하므로, 이 헤더를 직접 지정하면 안 된다.
+ */
+export async function uploadKakaoExport(
+  folderId: number,
+  file: File,
+  options: { analyze?: boolean; priority?: KakaoImportPriority } = {},
+) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("analyze", String(options.analyze ?? true));
+  form.append("priority", options.priority ?? "bulk");
+
+  const response = await fetch(`${API_BASE}/folders/${folderId}/imports/kakao`, {
+    method: "POST",
+    credentials: "same-origin",
+    body: form,
+  });
+  if (!response.ok) {
+    const detail = await readErrorMessage(response);
+    throw new ApiError(KAKAO_ERROR_MESSAGES[detail] ?? detail, response.status);
+  }
+  return (await response.json()) as KakaoImportResponse;
 }

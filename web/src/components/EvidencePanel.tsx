@@ -110,11 +110,9 @@ export function EvidencePanel({ video, playerRef, onAnalyze, chat, onSeek }: Pro
                     )}
                     <span className="min-w-0 truncate text-muted-foreground">{item.title}</span>
                   </div>
-                  <p
-                    className={`mt-1.5 text-xs leading-relaxed text-foreground/75 ${
-                      item.highlight ? "" : "line-clamp-2"
-                    }`}
-                  >
+                  {/* 예전엔 근거 인용문이 문장 중간에서 말줄임표로 잘려("짤림") 무슨 내용인지
+                      알기 어려웠다. 근거 인용문은 항상 전체를 보여준다. */}
+                  <p className="mt-1.5 text-xs leading-relaxed text-foreground/75">
                     {quoteWithHighlight(item)}
                   </p>
                 </button>

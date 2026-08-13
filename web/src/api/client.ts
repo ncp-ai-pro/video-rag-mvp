@@ -12,7 +12,7 @@ export class ApiError extends Error {
 }
 
 /** FastAPI는 오류를 {detail: string} 또는 {detail: ValidationError[]}로 준다. */
-async function readErrorMessage(response: Response): Promise<string> {
+export async function readErrorMessage(response: Response): Promise<string> {
   const body = await response.json().catch(() => null);
   const detail = body?.detail;
   if (typeof detail === "string") return detail;

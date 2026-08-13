@@ -31,6 +31,7 @@ export function formatUploadDate(value: string | null): string {
 }
 
 export const STAGE_LABEL: Record<AnalysisStage, string> = {
+  metadata_pending: '영상 정보를 가져오는 중',
   metadata_only: '메타데이터만 수집됨',
   queued: '대기 중',
   downloading_caption: '자막 수집 중',
@@ -42,6 +43,7 @@ export const STAGE_LABEL: Record<AnalysisStage, string> = {
 }
 
 export const STATUS_LABEL: Record<AnalysisStatus, string> = {
+  metadata_pending: '정보 수집 중',
   metadata_only: '미분석',
   queued: '대기',
   running: '분석 중',

@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { useExportChat } from "@/hooks/chat/use-export-chat";
 import { useTts } from "@/hooks/chat/use-tts";
 import type { UseChatResult } from "@/hooks/chat/use-chat";
-import { isAnalysisActive, type FolderVideo } from "@/api/types";
+import { isAnalysisActive, isMetadataPending, type FolderVideo } from "@/api/types";
 
 interface Props {
   /** 대화 상태·동작은 WorkspacePage가 useChat으로 만들어 내려준다(EvidencePanel과 turns를 공유하기 위해). */
@@ -20,6 +20,7 @@ interface Props {
 export function ChatPanel({ chat, video, onError }: Props) {
   const videoId = video?.id ?? null;
   const videoTitle = video?.title ?? null;
+  const metadataPending = video ? isMetadataPending(video.analysis_status) : false;
   const analyzing = video ? isAnalysisActive(video.analysis_status) : false;
   const {
     turns,
@@ -92,8 +93,13 @@ export function ChatPanel({ chat, video, onError }: Props) {
         </span>
       </div>
 
-      {/* 선택한 영상이 분석 중이면, 우측 영상 자리 대신 여기(가운데)에서 진행 상황을 크게 보여준다. */}
-      {analyzing && video ? (
+      {/* 선택한 영상이 분석 중이면, 우측 영상 자리 대신 여기(가운데)에서 진행 상황을 크게 보여준다.
+          metadata_pending은 아직 분석 파이프라인 이전 단계라 AnalysisProgress 대신 짧은 안내만 보여준다. */}
+      {metadataPending && video ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-4 text-center text-sm text-muted-foreground">
+          영상 정보를 가져오는 중입니다…
+        </div>
+      ) : analyzing && video ? (
         <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-4">
           <AnalysisProgress video={video} />
         </div>
@@ -271,15 +277,19 @@ export function ChatPanel({ chat, video, onError }: Props) {
           <Input
             value={query}
             placeholder={
-              canAsk ? "영상에 대해 질문하기" : "질문할 영상을 먼저 선택하세요"
+              metadataPending
+                ? "영상 정보를 가져오는 중입니다…"
+                : canAsk
+                  ? "영상에 대해 질문하기"
+                  : "질문할 영상을 먼저 선택하세요"
             }
             aria-label="RAG 질문"
-            disabled={!canAsk}
+            disabled={!canAsk || metadataPending}
             onChange={(event) => setQuery(event.target.value)}
           />
           <Button
             type="submit"
-            disabled={streaming || !canAsk || !query.trim()}
+            disabled={streaming || !canAsk || metadataPending || !query.trim()}
           >
             {streaming ? "생성 중…" : "질문"}
           </Button>
