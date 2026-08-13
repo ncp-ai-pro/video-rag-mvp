@@ -1,23 +1,26 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Volume2 } from "lucide-react";
 
+import { AnalysisProgress } from "@/components/AnalysisProgress";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useExportChat } from "@/hooks/chat/use-export-chat";
 import { useTts } from "@/hooks/chat/use-tts";
 import type { UseChatResult } from "@/hooks/chat/use-chat";
+import { isAnalysisActive, type FolderVideo } from "@/api/types";
 
 interface Props {
   /** 대화 상태·동작은 WorkspacePage가 useChat으로 만들어 내려준다(EvidencePanel과 turns를 공유하기 위해). */
   chat: UseChatResult;
-  /** 선택된 영상 ID. 대화 내보내기(TXT/PDF) 호출에 쓰인다. */
-  videoId: number | null;
-  /** 선택된 영상 제목. 대화 대상 표시용이다. */
-  videoTitle?: string | null;
+  /** 선택된 영상. 대화 대상 표시, 내보내기, 분석 진행 표시에 쓰인다. */
+  video: FolderVideo | null;
   onError: (message: string) => void;
 }
 
-export function ChatPanel({ chat, videoId, videoTitle, onError }: Props) {
+export function ChatPanel({ chat, video, onError }: Props) {
+  const videoId = video?.id ?? null;
+  const videoTitle = video?.title ?? null;
+  const analyzing = video ? isAnalysisActive(video.analysis_status) : false;
   const {
     turns,
     query,
@@ -89,7 +92,13 @@ export function ChatPanel({ chat, videoId, videoTitle, onError }: Props) {
         </span>
       </div>
 
-      {/* 대화 (백엔드 저장, 영상 단위) */}
+      {/* 선택한 영상이 분석 중이면, 우측 영상 자리 대신 여기(가운데)에서 진행 상황을 크게 보여준다. */}
+      {analyzing && video ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-4">
+          <AnalysisProgress video={video} />
+        </div>
+      ) : (
+      /* 대화 (백엔드 저장, 영상 단위) */
       <div
         ref={scrollRef}
         className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4"
@@ -197,6 +206,7 @@ export function ChatPanel({ chat, videoId, videoTitle, onError }: Props) {
           );
         })}
       </div>
+      )}
 
       {/* 입력 */}
       <div className="border-t border-border/60 p-3">
