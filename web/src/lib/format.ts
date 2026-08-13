@@ -100,6 +100,26 @@ export function stepState(step: ProgressStep, current: AnalysisStage): StepState
   return 'pending'
 }
 
+/**
+ * 채널 소스 URL에서 사람이 알아볼 수 있는 라벨을 뽑는다. 백엔드가 name을 채워주지
+ * 않아서(스캔 후에도 계속 null) 항상 URL 그대로만 보여서 뭘 연결했는지 알 수 없었다.
+ * https://youtube.com/@handle → "@handle", playlist?list=… → "재생목록 · …".
+ */
+export function channelSourceLabel(url: string): string {
+  try {
+    const parsed = new URL(url)
+    const listId = parsed.searchParams.get('list')
+    if (listId) return `재생목록 · ${listId}`
+    const handleMatch = /\/@([^/?]+)/.exec(parsed.pathname)
+    if (handleMatch) return `@${handleMatch[1]}`
+    const namedMatch = /\/(?:c|user|channel)\/([^/?]+)/.exec(parsed.pathname)
+    if (namedMatch) return namedMatch[1]
+    return url
+  } catch {
+    return url
+  }
+}
+
 /** 근거 url(`...watch?v=ID&t=12s`)에서 YouTube 영상 ID만 뽑는다. */
 export function youtubeIdFromUrl(rawUrl: string): string | null {
   try {

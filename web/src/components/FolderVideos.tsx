@@ -1,9 +1,9 @@
-import { useMemo, useRef, useState } from 'react'
-import { Link2, MessageCircle, Play, Plus, Rss } from 'lucide-react'
-import { toast } from 'sonner'
+import { useMemo, useRef, useState } from "react";
+import { Link2, MessageCircle, Play, Plus, RotateCw, Rss } from "lucide-react";
+import { toast } from "sonner";
 
-import { StatusBadge } from '@/components/StatusBadge'
-import { Button } from '@/components/ui/button'
+import { StatusBadge } from "@/components/StatusBadge";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -11,42 +11,56 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Skeleton } from '@/components/ui/skeleton'
-import { useFolderVideos } from '@/hooks/queries/folder/use-folder-videos'
-import { useFolderCandidates } from '@/hooks/queries/folder/use-folder-candidates'
-import { useAddFolderVideo } from '@/hooks/mutations/folder/use-add-folder-video'
-import { useAnalyzeCandidate } from '@/hooks/mutations/folder/use-analyze-candidate'
-import { useAddChannelSource } from '@/hooks/mutations/folder/use-add-channel-source'
-import { useUploadKakaoImport } from '@/hooks/mutations/folder/use-upload-kakao-import'
-import { formatUploadDate } from '@/lib/format'
-import { cn } from '@/lib/utils'
-import type { FolderCandidate, FolderVideo } from '@/api/types'
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useFolderVideos } from "@/hooks/queries/folder/use-folder-videos";
+import { useFolderCandidates } from "@/hooks/queries/folder/use-folder-candidates";
+import { useChannelSources } from "@/hooks/queries/folder/use-channel-sources";
+import { useAddFolderVideo } from "@/hooks/mutations/folder/use-add-folder-video";
+import { useAnalyzeCandidate } from "@/hooks/mutations/folder/use-analyze-candidate";
+import { useAddChannelSource } from "@/hooks/mutations/folder/use-add-channel-source";
+import { useScanChannelSource } from "@/hooks/mutations/folder/use-scan-channel-source";
+import { useUploadKakaoImport } from "@/hooks/mutations/folder/use-upload-kakao-import";
+import { channelSourceLabel, formatUploadDate } from "@/lib/format";
+import { cn } from "@/lib/utils";
+import type { ChannelSource, FolderCandidate, FolderVideo } from "@/api/types";
 
 interface Props {
-  selectedFolderId: number | null
-  selectedVideoId: number | null
-  onSelectVideo: (video: FolderVideo) => void
-  onError: (message: string) => void
+  selectedFolderId: number | null;
+  selectedVideoId: number | null;
+  onSelectVideo: (video: FolderVideo) => void;
+  onError: (message: string) => void;
 }
 
-function VideoRow({ video, active, onClick }: { video: FolderVideo; active: boolean; onClick: () => void }) {
+function VideoRow({
+  video,
+  active,
+  onClick,
+}: {
+  video: FolderVideo;
+  active: boolean;
+  onClick: () => void;
+}) {
   return (
     <li>
       <button
         type="button"
         onClick={onClick}
         className={cn(
-          'flex w-full items-start gap-3 border-b border-border/40 px-3 py-2.5 text-left transition-colors hover:bg-accent',
-          active && 'bg-accent',
+          "flex w-full items-start gap-3 border-b border-border/40 px-3 py-2.5 text-left transition-colors hover:bg-accent",
+          active && "bg-accent",
         )}
       >
         {/* UnivAI 문서 카드처럼 썸네일을 앞에 둔다. thumbnail_url이 없으면 그라데이션 + 아이콘으로 대신한다. */}
         <span className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br from-primary/25 to-primary/5">
           {video.thumbnail_url ? (
-            <img src={video.thumbnail_url} alt="" className="size-full object-cover" />
+            <img
+              src={video.thumbnail_url}
+              alt=""
+              className="size-full object-cover"
+            />
           ) : (
             <Play className="size-4 text-primary" />
           )}
@@ -62,7 +76,7 @@ function VideoRow({ video, active, onClick }: { video: FolderVideo; active: bool
         </div>
       </button>
     </li>
-  )
+  );
 }
 
 function CandidateRow({
@@ -70,9 +84,9 @@ function CandidateRow({
   adding,
   onAdd,
 }: {
-  candidate: FolderCandidate
-  adding: boolean
-  onAdd: () => void
+  candidate: FolderCandidate;
+  adding: boolean;
+  onAdd: () => void;
 }) {
   return (
     <li className="border-b border-border/40 px-3 py-2.5">
@@ -80,16 +94,65 @@ function CandidateRow({
         <div className="min-w-0">
           <p className="line-clamp-2 text-sm">{candidate.title}</p>
           <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-            {candidate.source_label ?? '추천'}
-            {candidate.score != null && ` · 유사도 ${candidate.score.toFixed(2)}`}
+            {candidate.source_label ?? "추천"}
+            {candidate.score != null &&
+              ` · 유사도 ${candidate.score.toFixed(2)}`}
           </p>
         </div>
-        <Button type="button" size="xs" variant="outline" disabled={adding} onClick={onAdd} className="shrink-0">
-          {adding ? '추가 중…' : '분석 후 추가'}
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          disabled={adding}
+          onClick={onAdd}
+          className="shrink-0"
+        >
+          {adding ? "추가 중…" : "분석 후 추가"}
         </Button>
       </div>
     </li>
-  )
+  );
+}
+
+function ChannelSourceRow({
+  source,
+  scanning,
+  onScan,
+}: {
+  source: ChannelSource;
+  scanning: boolean;
+  onScan: () => void;
+}) {
+  return (
+    <li className="flex items-start justify-between gap-2 border-b border-border/40 px-3 py-2.5">
+      <div className="min-w-0">
+        <p className="truncate text-sm">{source.name ?? channelSourceLabel(source.url)}</p>
+        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+          {/* last_scanned_at은 백엔드가 스캔 완료 후에도 안 채워줘서(항상 null), 실제로 스캔이
+              됐는지는 candidate_count로 판단한다 — 후보가 있는데 "아직 스캔하지 않음"이라고
+              나오면 헷갈리니까. */}
+          {scanning
+            ? "스캔 중…"
+            : source.last_scanned_at
+              ? `${new Date(source.last_scanned_at).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" })} 스캔 · 후보 ${source.candidate_count}개`
+              : source.candidate_count > 0
+                ? `스캔됨 · 후보 ${source.candidate_count}개`
+                : "아직 스캔하지 않음"}
+        </p>
+      </div>
+      <Button
+        type="button"
+        size="xs"
+        variant="outline"
+        disabled={scanning}
+        onClick={onScan}
+        className="shrink-0"
+      >
+        <RotateCw className={cn("size-3", scanning && "animate-spin")} />
+        {scanning ? "스캔 중…" : "다시 스캔"}
+      </Button>
+    </li>
+  );
 }
 
 /**
@@ -98,80 +161,105 @@ function CandidateRow({
  * folder-first-api-spec.md 기준: 폴더 영상과 수집 후보는 서로 다른 API(폴더 영상 vs 후보)다 —
  * 후보는 아직 실제 영상이 아니라서 클릭 대신 "분석 후 추가" 버튼으로만 폴더에 들어온다.
  */
-export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo, onError }: Props) {
-  const { data: videos = [], isLoading: videosLoading } = useFolderVideos(selectedFolderId)
-  const { data: candidates = [], isLoading: candidatesLoading } = useFolderCandidates(selectedFolderId)
+export function FolderVideos({
+  selectedFolderId,
+  selectedVideoId,
+  onSelectVideo,
+  onError,
+}: Props) {
+  const { data: videos = [], isLoading: videosLoading } =
+    useFolderVideos(selectedFolderId);
+  const { data: candidates = [], isLoading: candidatesLoading } =
+    useFolderCandidates(selectedFolderId);
+  const { data: channelSources = [] } = useChannelSources(selectedFolderId);
 
   const addVideoMutation = useAddFolderVideo(selectedFolderId, {
-    onError: () => onError('영상 추가에 실패했습니다.'),
-  })
+    onError: () => onError("영상 추가에 실패했습니다."),
+  });
   const analyzeCandidateMutation = useAnalyzeCandidate(selectedFolderId, {
-    onError: () => onError('후보를 폴더에 추가하지 못했습니다.'),
-  })
+    onError: () => onError("후보를 폴더에 추가하지 못했습니다."),
+  });
   const addChannelSourceMutation = useAddChannelSource(selectedFolderId, {
-    onError: () => onError('채널 연결에 실패했습니다.'),
-  })
+    onError: () => onError("채널 연결에 실패했습니다."),
+  });
+  const scanChannelSourceMutation = useScanChannelSource(selectedFolderId, {
+    onError: () => onError("다시 스캔하지 못했습니다."),
+  });
   const uploadKakaoMutation = useUploadKakaoImport(selectedFolderId, {
-    onError: (error) => onError(error.message || '카카오톡 파일 업로드에 실패했습니다.'),
-  })
+    onError: (error) =>
+      onError(error.message || "카카오톡 파일 업로드에 실패했습니다."),
+  });
 
-  const [filterText, setFilterText] = useState('')
-  const [addOpen, setAddOpen] = useState(false)
-  const [newVideoUrl, setNewVideoUrl] = useState('')
-  const [channelUrl, setChannelUrl] = useState('')
-  const [analyzingCandidateId, setAnalyzingCandidateId] = useState<number | null>(null)
-  const kakaoFileInputRef = useRef<HTMLInputElement>(null)
+  const [filterText, setFilterText] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [newVideoUrl, setNewVideoUrl] = useState("");
+  const [channelUrl, setChannelUrl] = useState("");
+  const [analyzingCandidateId, setAnalyzingCandidateId] = useState<
+    number | null
+  >(null);
+  const [scanningSourceId, setScanningSourceId] = useState<number | null>(null);
+  const kakaoFileInputRef = useRef<HTMLInputElement>(null);
 
   const filteredVideos = useMemo(() => {
-    const text = filterText.trim().toLowerCase()
-    return text ? videos.filter((video) => video.title.toLowerCase().includes(text)) : videos
-  }, [videos, filterText])
+    const text = filterText.trim().toLowerCase();
+    return text
+      ? videos.filter((video) => video.title.toLowerCase().includes(text))
+      : videos;
+  }, [videos, filterText]);
 
   const addVideo = (event: React.FormEvent) => {
-    event.preventDefault()
-    if (!newVideoUrl.trim() || selectedFolderId === null) return
+    event.preventDefault();
+    if (!newVideoUrl.trim() || selectedFolderId === null) return;
     addVideoMutation.mutate(newVideoUrl.trim(), {
-      onSuccess: () => setNewVideoUrl(''),
-    })
-  }
+      onSuccess: () => setNewVideoUrl(""),
+    });
+  };
 
   const connectChannel = (event: React.FormEvent) => {
-    event.preventDefault()
-    if (!channelUrl.trim() || selectedFolderId === null) return
+    event.preventDefault();
+    if (!channelUrl.trim() || selectedFolderId === null) return;
     addChannelSourceMutation.mutate(channelUrl.trim(), {
-      onSuccess: () => setChannelUrl(''),
-    })
-  }
+      onSuccess: () => setChannelUrl(""),
+    });
+  };
 
   const addCandidate = (candidate: FolderCandidate) => {
-    setAnalyzingCandidateId(candidate.id)
+    setAnalyzingCandidateId(candidate.id);
     analyzeCandidateMutation.mutate(candidate.id, {
       onSettled: () => setAnalyzingCandidateId(null),
-    })
-  }
+    });
+  };
+
+  const rescanChannelSource = (source: ChannelSource) => {
+    setScanningSourceId(source.id);
+    scanChannelSourceMutation.mutate(source.id, {
+      onSuccess: () => toast.success("다시 스캔을 등록했습니다. 잠시 후 수집 후보에 반영됩니다."),
+      onSettled: () => setScanningSourceId(null),
+    });
+  };
 
   // 대량 import라 기본 priority는 "bulk" 권장(백엔드 안내). 업로드 후 요약(총/신규/중복/분석 등록)을 토스트로 알린다.
   const uploadKakaoFile = (file: File) => {
-    if (selectedFolderId === null) return
+    if (selectedFolderId === null) return;
     uploadKakaoMutation.mutate(
-      { file, analyze: true, priority: 'bulk' },
+      { file, analyze: true, priority: "bulk" },
       {
         onSuccess: (result) => {
           toast.success(
             `카카오톡 링크 ${result.total_urls}개 중 새 영상 ${result.unique_videos}개, 중복 ${result.duplicates}개 — 분석 ${result.queued_jobs}건 등록했습니다.`,
-          )
+          );
         },
       },
-    )
-    if (kakaoFileInputRef.current) kakaoFileInputRef.current.value = ''
-  }
+    );
+    if (kakaoFileInputRef.current) kakaoFileInputRef.current.value = "";
+  };
 
   if (selectedFolderId === null) {
     return (
       <div className="flex h-full items-center justify-center p-4 text-xs text-muted-foreground">
         폴더를 선택하세요.
       </div>
-    )
+    );
   }
 
   return (
@@ -187,7 +275,12 @@ export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo,
         />
         <Dialog open={addOpen} onOpenChange={setAddOpen}>
           <DialogTrigger asChild>
-            <Button type="button" variant="outline" size="icon-sm" aria-label="영상 추가">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-sm"
+              aria-label="영상 추가"
+            >
               <Plus />
             </Button>
           </DialogTrigger>
@@ -195,7 +288,8 @@ export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo,
             <DialogHeader>
               <DialogTitle>영상 추가</DialogTitle>
               <DialogDescription>
-                URL을 직접 넣거나, 채널을 연결하거나, 카카오톡 채팅 내보내기 파일로 한꺼번에 영상을 모읍니다.
+                URL을 직접 넣거나, 채널을 연결하거나, 카카오톡 채팅 내보내기
+                파일로 한꺼번에 영상을 모읍니다.
               </DialogDescription>
             </DialogHeader>
 
@@ -207,7 +301,9 @@ export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo,
                   </span>
                   <div>
                     <p className="text-sm font-medium">URL로 추가</p>
-                    <p className="text-[11px] text-muted-foreground">영상 링크 하나를 바로 넣습니다</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      영상 링크 하나를 바로 넣습니다
+                    </p>
                   </div>
                 </div>
                 <form onSubmit={addVideo} className="space-y-2">
@@ -224,7 +320,7 @@ export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo,
                     className="w-full"
                     disabled={addVideoMutation.isPending || !newVideoUrl.trim()}
                   >
-                    {addVideoMutation.isPending ? '추가 중…' : '추가'}
+                    {addVideoMutation.isPending ? "추가 중…" : "추가"}
                   </Button>
                 </form>
               </div>
@@ -237,7 +333,8 @@ export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo,
                   <div>
                     <p className="text-sm font-medium">채널·재생목록 연결</p>
                     <p className="text-[11px] text-muted-foreground">
-                      새 영상을 찾아 수집 후보로 추천 (채널·재생목록 URL 둘 다 가능)
+                      새 영상을 찾아 수집 후보로 추천 (채널·재생목록 URL 둘 다
+                      가능)
                     </p>
                   </div>
                 </div>
@@ -254,9 +351,11 @@ export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo,
                     type="submit"
                     variant="outline"
                     className="w-full"
-                    disabled={addChannelSourceMutation.isPending || !channelUrl.trim()}
+                    disabled={
+                      addChannelSourceMutation.isPending || !channelUrl.trim()
+                    }
                   >
-                    {addChannelSourceMutation.isPending ? '연결 중…' : '연결'}
+                    {addChannelSourceMutation.isPending ? "연결 중…" : "연결"}
                   </Button>
                 </form>
               </div>
@@ -267,9 +366,12 @@ export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo,
                     <MessageCircle className="size-4" />
                   </span>
                   <div>
-                    <p className="text-sm font-medium">카카오톡 내보내기 업로드</p>
+                    <p className="text-sm font-medium">
+                      카카오톡 내보내기 업로드
+                    </p>
                     <p className="text-[11px] text-muted-foreground">
-                      채팅방에서 내보낸 .txt 파일 속 YouTube 링크를 한꺼번에 모읍니다
+                      채팅방에서 내보낸 .txt 파일 속 YouTube 링크를 한꺼번에
+                      모읍니다
                     </p>
                   </div>
                 </div>
@@ -277,17 +379,19 @@ export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo,
                   <input
                     ref={kakaoFileInputRef}
                     type="file"
-                    accept=".txt"
+                    accept=".csv"
                     aria-label="카카오톡 내보내기 파일"
                     disabled={uploadKakaoMutation.isPending}
                     onChange={(event) => {
-                      const file = event.target.files?.[0]
-                      if (file) uploadKakaoFile(file)
+                      const file = event.target.files?.[0];
+                      if (file) uploadKakaoFile(file);
                     }}
                     className="block w-full text-xs text-muted-foreground file:mr-2 file:rounded-md file:border-0 file:bg-primary/15 file:px-2.5 file:py-1.5 file:text-xs file:font-medium file:text-primary hover:file:bg-primary/25"
                   />
                   {uploadKakaoMutation.isPending && (
-                    <p className="text-[11px] text-muted-foreground">업로드하고 링크를 정리하는 중…</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      업로드하고 링크를 정리하는 중…
+                    </p>
                   )}
                 </div>
               </div>
@@ -338,7 +442,25 @@ export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo,
             </ul>
           </div>
         )}
+
+        {channelSources.length > 0 && (
+          <div>
+            <p className="bg-background/95 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground backdrop-blur">
+              연결된 채널 · {channelSources.length}
+            </p>
+            <ul>
+              {channelSources.map((source) => (
+                <ChannelSourceRow
+                  key={source.id}
+                  source={source}
+                  scanning={scanningSourceId === source.id}
+                  onScan={() => rescanChannelSource(source)}
+                />
+              ))}
+            </ul>
+          </div>
+        )}
       </ScrollArea>
     </div>
-  )
+  );
 }
