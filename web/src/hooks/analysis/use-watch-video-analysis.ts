@@ -2,18 +2,18 @@ import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { useAnalysisEvents } from "./use-analysis-events";
-import type { AnalysisEvent, Video } from "@/api/types";
+import type { AnalysisEvent, FolderVideo } from "@/api/types";
 
 /**
- * 분석 중인 영상의 SSE 진행 상태를 videos 쿼리 캐시에 직접 반영한다.
- * 화면은 useVideos(channelId)만 구독하면 되고, 재조회 없이 자동으로 갱신된다.
+ * 분석 중인 영상의 SSE 진행 상태를 folder-videos 쿼리 캐시에 직접 반영한다.
+ * 화면은 useFolderVideos(folderId)만 구독하면 되고, 재조회 없이 자동으로 갱신된다.
  */
-export function useWatchVideoAnalysis(channelId: number | null, videoId: number | null) {
+export function useWatchVideoAnalysis(folderId: number | null, videoId: number | null) {
   const queryClient = useQueryClient();
 
   const onEvent = useCallback(
     (event: AnalysisEvent) => {
-      queryClient.setQueryData<Video[]>(["videos", channelId], (current) =>
+      queryClient.setQueryData<FolderVideo[]>(["folder-videos", folderId], (current) =>
         current?.map((video) =>
           video.id === event.video_id
             ? {
@@ -28,7 +28,7 @@ export function useWatchVideoAnalysis(channelId: number | null, videoId: number 
         ),
       );
     },
-    [queryClient, channelId],
+    [queryClient, folderId],
   );
 
   useAnalysisEvents(videoId, onEvent);

@@ -1,34 +1,26 @@
-import { useLayoutEffect, useRef } from "react";
-import { Play, Volume2 } from "lucide-react";
+import { useLayoutEffect, useRef, useState } from "react";
+import { Volume2 } from "lucide-react";
 
+import { AnalysisProgress } from "@/components/AnalysisProgress";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useChat } from "@/hooks/chat/use-chat";
-import { useTts } from "@/hooks/chat/use-tts";
-import { formatTimestamp, playbackUrl, youtubeIdFromUrl } from "@/lib/format";
-import type { Evidence } from "@/api/types";
 import { useExportChat } from "@/hooks/chat/use-export-chat";
-import { useState } from "react";
+import { useTts } from "@/hooks/chat/use-tts";
+import type { UseChatResult } from "@/hooks/chat/use-chat";
+import { isAnalysisActive, type FolderVideo } from "@/api/types";
 
 interface Props {
-  /** 작업공간이 바뀌면 그 작업공간의 대화 기록을 다시 불러온다. */
-  workspaceCode: string | null;
-  /** 선택된 영상 ID. 대화는 영상 단위로 저장·조회되므로 없으면 질문할 수 없다. */
-  videoId: number | null;
-  /** 선택된 영상 제목. 대화 대상 표시용이다. */
-  videoTitle?: string | null;
-  /** 근거 클릭 시 플레이어를 해당 영상·시점으로 이동시킨다. */
-  onSeek: (youtubeId: string, seconds: number) => void;
+  /** 대화 상태·동작은 WorkspacePage가 useChat으로 만들어 내려준다(EvidencePanel과 turns를 공유하기 위해). */
+  chat: UseChatResult;
+  /** 선택된 영상. 대화 대상 표시, 내보내기, 분석 진행 표시에 쓰인다. */
+  video: FolderVideo | null;
   onError: (message: string) => void;
 }
 
-export function ChatPanel({
-  workspaceCode,
-  videoId,
-  videoTitle,
-  onSeek,
-  onError,
-}: Props) {
+export function ChatPanel({ chat, video, onError }: Props) {
+  const videoId = video?.id ?? null;
+  const videoTitle = video?.title ?? null;
+  const analyzing = video ? isAnalysisActive(video.analysis_status) : false;
   const {
     turns,
     query,
@@ -41,13 +33,15 @@ export function ChatPanel({
     historyHasMore,
     historyLoading,
     loadOlderHistory,
-  } = useChat(workspaceCode, videoId, onError);
+  } = chat;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const preserveScrollHeightRef = useRef<number | null>(null);
   const tts = useTts(onError);
   const { exportingFormat, exportChat } = useExportChat(onError);
-  const [selectedTurnIds, setSelectedTurnIds] = useState<Set<string>>(new Set());
+  const [selectedTurnIds, setSelectedTurnIds] = useState<Set<string>>(
+    new Set(),
+  );
 
   const toggleTurnSelection = (turnId: string) => {
     setSelectedTurnIds((prev) => {
@@ -59,7 +53,9 @@ export function ChatPanel({
   };
 
   const selectedMessageIds = Array.from(selectedTurnIds)
-    .map((id) => (id.startsWith("message-") ? Number(id.slice("message-".length)) : null))
+    .map((id) =>
+      id.startsWith("message-") ? Number(id.slice("message-".length)) : null,
+    )
     .filter((id): id is number => id !== null);
 
   // 새 내용이 생기면 맨 아래로. 이전 대화를 앞에 붙였을 때는 보던 위치가 그대로 보이도록 높이를 보정한다.
@@ -87,30 +83,6 @@ export function ChatPanel({
     void ask(query);
   };
 
-  const seekTo = (item: Evidence) => {
-    const youtubeId = youtubeIdFromUrl(item.url);
-    if (youtubeId) onSeek(youtubeId, item.start_seconds);
-    else window.open(playbackUrl(item.url), "_blank", "noreferrer");
-  };
-
-  const quoteWithHighlight = (item: Evidence) => {
-    const quote = item.quote;
-    const highlight = item.highlight?.text;
-    if (!highlight) return quote;
-    const index = quote.indexOf(highlight);
-    if (index < 0) return quote;
-    return (
-      <>
-        {quote.slice(0, index)}
-        {/* 형광펜 효과: 텍스트 아래쪽만 노란 배경을 깔아 마커로 칠한 것처럼 보이게 한다. */}
-        <mark className="rounded-[2px] bg-gradient-to-t from-yellow-300/ from-40% to-transparent to-40% px-0.5 text-black">
-          {highlight}
-        </mark>
-        {quote.slice(index + highlight.length)}
-      </>
-    );
-  };
-
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border/60 px-4 py-2.5">
@@ -120,7 +92,13 @@ export function ChatPanel({
         </span>
       </div>
 
-      {/* 대화 (백엔드 저장, 영상 단위) */}
+      {/* 선택한 영상이 분석 중이면, 우측 영상 자리 대신 여기(가운데)에서 진행 상황을 크게 보여준다. */}
+      {analyzing && video ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-4">
+          <AnalysisProgress video={video} />
+        </div>
+      ) : (
+      /* 대화 (백엔드 저장, 영상 단위) */
       <div
         ref={scrollRef}
         className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4"
@@ -146,7 +124,7 @@ export function ChatPanel({
           <p className="text-sm text-muted-foreground">
             {canAsk
               ? "이 영상에서 분석된 자막 근거를 찾아 답합니다. 아래에 질문을 입력하세요."
-              : "왼쪽 목록에서 질문할 영상을 먼저 선택하세요."}
+              : "영상 목록에서 질문할 영상을 먼저 선택하세요."}
           </p>
         )}
 
@@ -189,13 +167,13 @@ export function ChatPanel({
               )}
 
               {turn.status === "done" && turn.answer.trim() && (
-                <div>
+                <div className="flex items-center gap-2">
                   {tts.turnId === turn.id && tts.audioUrl ? (
                     <audio
                       controls
                       autoPlay
                       src={tts.audioUrl}
-                      className="h-8 w-full"
+                      className="h-8 flex-1"
                       onPlay={(event) => {
                         event.currentTarget.playbackRate = 1.5;
                       }}
@@ -214,67 +192,21 @@ export function ChatPanel({
                         : "답변 듣기"}
                     </Button>
                   )}
-                </div>
-              )}
 
-              {/* 근거 구간 */}
-              {turn.evidence.length > 0 && (
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <p className="text-[0.72rem] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                      참고 구간
-                    </p>
-                    <p className="text-[0.72rem] text-muted-foreground">
-                      클릭하면 영상 위치로 이동
-                    </p>
-                  </div>
-                  <ul className="space-y-1.5">
-                    {turn.evidence.map((item) => (
-                      <li key={`${item.video_id}-${item.start_seconds}`}>
-                        <button
-                          type="button"
-                          onClick={() => seekTo(item)}
-                          className={`group w-full rounded-xl border px-3 py-2 text-left transition-colors hover:border-foreground/20 hover:bg-muted/40 ${
-                            item.is_primary
-                              ? "border-foreground/15 bg-background shadow-[inset_2px_0_0_hsl(var(--foreground)/0.28)]"
-                              : "border-border/60 bg-background/70"
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 text-xs">
-                            {/* shrink-0 + whitespace-nowrap이 없으면 좁은 폭에서 "0:10–0:40" 같은
-                                타임스탬프 안쪽에서 줄바꿈이 일어나 두 줄로 쪼개진다. */}
-                            <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-muted px-2 py-0.5 font-mono text-[0.68rem] text-muted-foreground">
-                              <Play className="size-3" />
-                              {formatTimestamp(item.start_seconds)}–
-                              {formatTimestamp(item.end_seconds)}
-                            </span>
-                            {item.is_primary && (
-                              <span className="shrink-0 whitespace-nowrap rounded-full border border-border/70 px-1.5 py-0.5 text-[0.65rem] font-medium text-foreground/70">
-                                주요
-                              </span>
-                            )}
-                            <span className="min-w-0 truncate text-muted-foreground">
-                              {item.title}
-                            </span>
-                          </div>
-                          {/* 하이라이트된 문장이 잘려서 안 보이는 일이 없도록, 하이라이트가 있으면 전체를 펼친다. */}
-                          <p
-                            className={`mt-1.5 text-xs leading-relaxed text-foreground/75 ${
-                              item.highlight ? "" : "line-clamp-2"
-                            }`}
-                          >
-                            {quoteWithHighlight(item)}
-                          </p>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                  {/* 근거 상세는 채팅을 길게 만들지 않도록 오른쪽 근거 패널에서 보여준다.
+                      이 배지는 몇 개인지만 알려준다(모바일엔 호버가 없어 클릭·호버 트리거 대신 이 편이 낫다). */}
+                  {turn.evidence.length > 0 && (
+                    <span className="text-[0.72rem] text-muted-foreground">
+                      근거 {turn.evidence.length}개 → 오른쪽 패널
+                    </span>
+                  )}
                 </div>
               )}
             </div>
           );
         })}
       </div>
+      )}
 
       {/* 입력 */}
       <div className="border-t border-border/60 p-3">
@@ -352,23 +284,39 @@ export function ChatPanel({
             {streaming ? "생성 중…" : "질문"}
           </Button>
           <Button
-  type="button"
-  variant="ghost"
-  size="sm"
-  disabled={!videoId || turns.length === 0 || exportingFormat !== null}
-  onClick={() => void exportChat(videoId, selectedMessageIds.length > 0 ? selectedMessageIds : undefined, "txt")}
->
-  {exportingFormat === "txt" ? "내보내는 중…" : "TXT"}
-</Button>
-<Button
-  type="button"
-  variant="ghost"
-  size="sm"
-  disabled={!videoId || turns.length === 0 || exportingFormat !== null}
-  onClick={() => void exportChat(videoId, selectedMessageIds.length > 0 ? selectedMessageIds : undefined, "pdf")}
->
-  {exportingFormat === "pdf" ? "내보내는 중…" : "PDF"}
-</Button>
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={
+              !videoId || turns.length === 0 || exportingFormat !== null
+            }
+            onClick={() =>
+              void exportChat(
+                videoId,
+                selectedMessageIds.length > 0 ? selectedMessageIds : undefined,
+                "txt",
+              )
+            }
+          >
+            {exportingFormat === "txt" ? "내보내는 중…" : "TXT"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={
+              !videoId || turns.length === 0 || exportingFormat !== null
+            }
+            onClick={() =>
+              void exportChat(
+                videoId,
+                selectedMessageIds.length > 0 ? selectedMessageIds : undefined,
+                "pdf",
+              )
+            }
+          >
+            {exportingFormat === "pdf" ? "내보내는 중…" : "PDF"}
+          </Button>
         </form>
       </div>
     </div>

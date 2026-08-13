@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { streamChat } from "@/api/chat";
+import { streamFolderChat } from "@/api/chat";
 import { useChatHistory } from "@/hooks/queries/chat/use-chat-history";
 import type { ChatMessage, Evidence, EvidenceMode } from "@/api/types";
 
@@ -52,23 +52,24 @@ function messagesToTurns(messages: ChatMessage[]): ChatTurn[] {
  */
 export function useChat(
   workspaceCode: string | null,
+  folderId: number | null,
   videoId: number | null,
   onError: (message: string) => void,
 ) {
-  // 대화는 영상 단위로 저장·조회된다. videoId가 없으면 질문도, 기록 조회도 하지 않는다.
-  const history = useChatHistory(workspaceCode, videoId);
+  // 대화는 폴더 단위로 저장·조회된다. videoId가 있으면 그 영상으로, 없으면 폴더 전체로 좁힌다.
+  const history = useChatHistory(workspaceCode, folderId, videoId);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [query, setQuery] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [evidenceMode, setEvidenceMode] = useState<EvidenceMode>("simple");
   const abortRef = useRef<AbortController | null>(null);
 
-  // 영상이 바뀌면 진행 중이던 스트리밍을 끊는다. 미선택 상태면 대화도 비운다.
+  // 폴더나 영상이 바뀌면 진행 중이던 스트리밍을 끊는다. 폴더 미선택 상태면 대화도 비운다.
   useEffect(() => {
     abortRef.current?.abort();
     setStreaming(false);
-    if (videoId === null) setTurns([]);
-  }, [videoId]);
+    if (folderId === null) setTurns([]);
+  }, [folderId, videoId]);
 
   // 페이지들은 최신이 먼저 오므로 뒤집어서 오래된→최신 순으로 합친다.
   useEffect(() => {
@@ -85,7 +86,7 @@ export function useChat(
 
   const ask = async (question: string) => {
     const trimmed = question.trim();
-    if (!trimmed || streaming || videoId === null) return;
+    if (!trimmed || streaming || folderId === null) return;
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -100,7 +101,8 @@ export function useChat(
       setTurns((prev) => prev.map((turn) => (turn.id === id ? fn(turn) : turn)));
 
     try {
-      await streamChat(
+      await streamFolderChat(
+        folderId,
         trimmed,
         (event) => {
           switch (event.type) {
@@ -137,8 +139,8 @@ export function useChat(
     setQuery,
     streaming,
     ask,
-    /** 영상을 선택해야 질문·기록 조회가 가능하다. */
-    canAsk: videoId !== null,
+    /** 폴더만 선택하면 질문할 수 있다(영상 미선택 시 폴더 전체를 검색한다). */
+    canAsk: folderId !== null,
     evidenceMode,
     setEvidenceMode,
     historyHasMore: history.hasNextPage ?? false,
@@ -146,3 +148,6 @@ export function useChat(
     loadOlderHistory,
   };
 }
+
+/** ChatPanel·EvidencePanel이 함께 쓰는, useChat이 반환하는 상태·동작의 타입. */
+export type UseChatResult = ReturnType<typeof useChat>;
