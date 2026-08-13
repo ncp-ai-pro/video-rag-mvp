@@ -5,14 +5,14 @@ import re
 import subprocess
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Iterator, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from . import chat_cache, config
+from . import analysis_queue, chat_cache, config
 from .db import connection, is_postgres
 
 
@@ -25,6 +25,15 @@ ANALYSIS_MESSAGES = {
     "completed": "분석이 완료되었습니다. 이제 질문할 수 있습니다.",
     "failed": "분석에 실패했습니다.",
 }
+
+YOUTUBE_RATE_LIMIT_MARKERS = (
+    "rate-limited",
+    "rate limited",
+    "try again later",
+    "too many requests",
+    "http error 429",
+    "429 too many requests",
+)
 
 
 def object_storage_is_configured() -> bool:
@@ -81,6 +90,17 @@ def upload_artifact_json(payload: Dict, object_key: str) -> str:
         Key=object_key,
         Body=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
         ContentType="application/json; charset=utf-8",
+    )
+    return object_key
+
+
+def upload_artifact_bytes(payload: bytes, object_key: str, content_type: str) -> str:
+    """Stores bytes in Object Storage; callers keep DB rows as the durable index."""
+    _object_storage_client().put_object(
+        Bucket=config.NCP_OBJECT_STORAGE_BUCKET,
+        Key=object_key,
+        Body=payload,
+        ContentType=content_type,
     )
     return object_key
 
@@ -258,22 +278,211 @@ def cosine(left: List[float], right: List[float]) -> float:
     return sum(a * b for a, b in zip(left, right))
 
 
-def enqueue(kind: str, resource_id: int) -> int:
+def _insert_outbox_event(conn, job_id: int, kind: str, priority: str, idempotency_key: Optional[str]) -> None:
+    conn.execute(
+        """
+        INSERT INTO outbox_events(event_type, aggregate_type, aggregate_id, payload_json, updated_at)
+        VALUES ('analysis_job_queued', 'job', ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        """,
+        (
+            job_id,
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "kind": kind,
+                    "priority": priority,
+                    "idempotency_key": idempotency_key or f"{kind}:{job_id}",
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        ),
+    )
+
+
+def publish_job_signal(job_id: int, kind: str, priority: str, idempotency_key: Optional[str]) -> bool:
+    """Wake RabbitMQ consumers when enabled; DB remains the durable queue."""
+    try:
+        return analysis_queue.publish_analysis_job(
+            job_id=job_id,
+            kind=kind,
+            priority=priority,
+            idempotency_key=idempotency_key or f"{kind}:{job_id}",
+        )
+    except Exception as exc:
+        with connection() as conn:
+            conn.execute(
+                """
+                UPDATE outbox_events
+                SET attempts=attempts+1, last_error=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE aggregate_type='job' AND aggregate_id=? AND status='pending'
+                """,
+                (str(exc)[:1000], job_id),
+            )
+        return False
+
+
+def publish_pending_outbox(limit: int = 100) -> Dict:
+    """Publishes due pending job events again; useful after RabbitMQ downtime or delayed retry."""
+    published = 0
+    failed = 0
     with connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT outbox_events.id, outbox_events.aggregate_id, outbox_events.payload_json
+            FROM outbox_events
+            JOIN jobs ON jobs.id=outbox_events.aggregate_id
+            WHERE outbox_events.status='pending'
+              AND outbox_events.event_type='analysis_job_queued'
+              AND jobs.status='queued'
+              AND (jobs.next_run_at IS NULL OR jobs.next_run_at <= CURRENT_TIMESTAMP)
+            ORDER BY outbox_events.id
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    for row in rows:
+        payload = json.loads(row["payload_json"])
+        try:
+            if analysis_queue.publish_analysis_job(
+                int(payload["job_id"]),
+                payload["kind"],
+                payload.get("priority") or "normal",
+                payload.get("idempotency_key") or f"job:{payload['job_id']}",
+            ):
+                with connection() as conn:
+                    conn.execute(
+                        """
+                        UPDATE outbox_events
+                        SET status='published', published_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                            updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                        WHERE id=?
+                        """,
+                        (row["id"],),
+                    )
+                published += 1
+        except Exception as exc:
+            with connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE outbox_events
+                    SET attempts=attempts+1, last_error=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    WHERE id=?
+                    """,
+                    (str(exc)[:1000], row["id"]),
+                )
+            failed += 1
+    return {"published": published, "failed": failed}
+
+
+def _job_retry_timestamp(delay_seconds: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def schedule_job_retry(job: Dict, error: str, *, delay_seconds: Optional[int] = None) -> bool:
+    """Move a running job back to queued with a future next_run_at.
+
+    Returns False when the job already consumed its retry budget, so the caller
+    can mark the job failed through the normal terminal-state path.
+    """
+    attempts = int(job.get("attempts") or 0)
+    max_attempts = int(job.get("max_attempts") or 3)
+    if attempts >= max_attempts:
+        return False
+
+    retry_delay = delay_seconds or config.YTDLP_RATE_LIMIT_RETRY_DELAY_SECONDS
+    next_run_at = _job_retry_timestamp(retry_delay)
+    retry_minutes = max(1, round(retry_delay / 60))
+    message = f"YouTube 요청 제한으로 {retry_minutes}분 뒤 다시 시도합니다. ({attempts}/{max_attempts})"
+    priority = analysis_queue.priority_name_from_database(int(job.get("priority") or 100))
+    idempotency_key = job.get("idempotency_key")
+    job_id = int(job["id"])
+
+    with connection() as conn:
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status='queued', progress_stage='queued', progress_message=?, error_message=?,
+                next_run_at=?, locked_at=NULL, locked_by=NULL, finished_at=NULL,
+                updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id=?
+            """,
+            (message, str(error)[:2000], next_run_at, job_id),
+        )
+        if job["kind"] == "analyze_video":
+            conn.execute(
+                """
+                UPDATE videos
+                SET analysis_status='queued', analysis_stage='queued', analysis_message=?,
+                    analysis_error=?, analysis_updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id=?
+                """,
+                (message, str(error)[:2000], job["resource_id"]),
+            )
+            conn.execute(
+                """
+                UPDATE video_analysis_index
+                SET analysis_status='queued', last_job_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE representative_video_id=?
+                """,
+                (job_id, job["resource_id"]),
+            )
+        _insert_outbox_event(conn, job_id, job["kind"], priority, idempotency_key)
+    return True
+
+
+def enqueue(kind: str, resource_id: int, *, priority: str = "normal", idempotency_key: Optional[str] = None) -> int:
+    db_priority = analysis_queue.priority_values(priority)["database"]
+    with connection() as conn:
+        if idempotency_key:
+            existing = conn.execute(
+                """
+                SELECT id FROM jobs
+                WHERE idempotency_key=? AND status IN ('queued', 'running')
+                ORDER BY id DESC LIMIT 1
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if existing:
+                return existing["id"]
         row = conn.execute(
             """
-            INSERT INTO jobs(kind, resource_id, progress_stage, progress_message, updated_at)
-            VALUES (?, ?, 'queued', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            INSERT INTO jobs(kind, resource_id, priority, idempotency_key, progress_stage, progress_message, updated_at)
+            VALUES (?, ?, ?, ?, 'queued', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             RETURNING id
             """,
-            (kind, resource_id, ANALYSIS_MESSAGES["queued"]),
+            (kind, resource_id, db_priority, idempotency_key, ANALYSIS_MESSAGES["queued"]),
         ).fetchone()
-        return row["id"]
+        job_id = row["id"]
+        _insert_outbox_event(conn, job_id, kind, priority, idempotency_key)
+    publish_job_signal(job_id, kind, priority, idempotency_key)
+    return job_id
 
 
-def enqueue_analysis(video_id: int) -> int:
+def enqueue_analysis(video_id: int, *, priority: str = "manual", idempotency_key: Optional[str] = None) -> int:
     """Creates the queued job and the video-visible progress in one DB transaction."""
+    db_priority = analysis_queue.priority_values(priority)["database"]
     with connection() as conn:
+        if idempotency_key:
+            existing = conn.execute(
+                """
+                SELECT id FROM jobs
+                WHERE idempotency_key=? AND status IN ('queued', 'running')
+                ORDER BY id DESC LIMIT 1
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE videos
+                    SET analysis_status='queued', analysis_stage='queued', analysis_message=?,
+                        analysis_error=NULL, analysis_updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    WHERE id=?
+                    """,
+                    (ANALYSIS_MESSAGES["queued"], video_id),
+                )
+                return existing["id"]
         conn.execute(
             """
             UPDATE videos
@@ -285,13 +494,24 @@ def enqueue_analysis(video_id: int) -> int:
         )
         row = conn.execute(
             """
-            INSERT INTO jobs(kind, resource_id, status, progress_stage, progress_message, updated_at)
-            VALUES ('analyze_video', ?, 'queued', 'queued', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            INSERT INTO jobs(kind, resource_id, status, priority, idempotency_key, progress_stage, progress_message, updated_at)
+            VALUES ('analyze_video', ?, 'queued', ?, ?, 'queued', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             RETURNING id
             """,
-            (video_id, ANALYSIS_MESSAGES["queued"]),
+            (video_id, db_priority, idempotency_key, ANALYSIS_MESSAGES["queued"]),
         ).fetchone()
-        return row["id"]
+        job_id = row["id"]
+        _insert_outbox_event(conn, job_id, "analyze_video", priority, idempotency_key)
+        conn.execute(
+            """
+            UPDATE video_analysis_index
+            SET analysis_status='queued', last_job_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE representative_video_id=?
+            """,
+            (job_id, video_id),
+        )
+    publish_job_signal(job_id, "analyze_video", priority, idempotency_key)
+    return job_id
 
 
 def update_analysis_progress(job_id: int, video_id: int, stage: str, message: Optional[str] = None):
@@ -362,6 +582,14 @@ def finish_analysis(job_id: int, video_id: int, error: Optional[str] = None):
             """,
             (status, stage, message, message if failed else None, status, video_id),
         )
+        conn.execute(
+            """
+            UPDATE video_analysis_index
+            SET analysis_status=?, last_job_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE representative_video_id=?
+            """,
+            (status, job_id, video_id),
+        )
 
 
 def analysis_event_state(video_id: int, user_id: int) -> Optional[Dict]:
@@ -418,7 +646,7 @@ def video_belongs_to_workspace(user_id: int, video_id: int) -> bool:
     return row is not None
 
 
-def upsert_video(channel_id: int, raw: Dict) -> int:
+def upsert_video(channel_id: int, raw: Dict, *, embed_metadata: bool = True) -> int:
     video = {
         "platform_video_id": raw["platform_video_id"],
         "title": raw["title"],
@@ -428,7 +656,7 @@ def upsert_video(channel_id: int, raw: Dict) -> int:
         "duration_seconds": raw.get("duration_seconds"),
         "uploaded_at": raw.get("uploaded_at"),
     }
-    vector = json.dumps(embedding(metadata_text(video)))
+    vector = json.dumps(embedding(metadata_text(video))) if embed_metadata else None
     with connection() as conn:
         row = conn.execute(
             """
@@ -462,6 +690,24 @@ def _yt_dlp_failure_message(result: subprocess.CompletedProcess) -> str:
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     error_lines = [line for line in lines if "error:" in line.lower()]
     return (error_lines or lines or ["yt-dlp exited without an error message"])[-1][:500]
+
+
+def yt_dlp_throttle_args() -> List[str]:
+    """Return yt-dlp pacing options used by API metadata calls and Worker downloads."""
+    args = []
+    if config.YTDLP_SLEEP_REQUESTS_SECONDS > 0:
+        args.extend(["--sleep-requests", str(config.YTDLP_SLEEP_REQUESTS_SECONDS)])
+    if config.YTDLP_SLEEP_INTERVAL_SECONDS > 0:
+        args.extend(["--sleep-interval", str(config.YTDLP_SLEEP_INTERVAL_SECONDS)])
+    if config.YTDLP_MAX_SLEEP_INTERVAL_SECONDS > 0:
+        args.extend(["--max-sleep-interval", str(config.YTDLP_MAX_SLEEP_INTERVAL_SECONDS)])
+    return args
+
+
+def is_youtube_rate_limited_error(message: str) -> bool:
+    """Detect YouTube throttling errors from yt-dlp output."""
+    normalized = str(message or "").lower()
+    return any(marker in normalized for marker in YOUTUBE_RATE_LIMIT_MARKERS)
 
 
 def _youtube_video_id(url: str) -> Optional[str]:
@@ -499,7 +745,14 @@ def collect_channel_metadata(url: str) -> List[Dict]:
     single_video_id = _youtube_video_id(url)
     if single_video_id:
         result = subprocess.run(
-            [config.YTDLP_BIN, "--dump-single-json", "--skip-download", "--no-playlist", url],
+            [
+                config.YTDLP_BIN,
+                "--dump-single-json",
+                "--skip-download",
+                "--no-playlist",
+                *yt_dlp_throttle_args(),
+                url,
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -510,7 +763,7 @@ def collect_channel_metadata(url: str) -> List[Dict]:
         return [_video_metadata_from_ytdlp(json.loads(result.stdout), single_video_id)]
 
     result = subprocess.run(
-        [config.YTDLP_BIN, "--flat-playlist", "--dump-json", "--skip-download", url],
+        [config.YTDLP_BIN, "--flat-playlist", "--dump-json", "--skip-download", *yt_dlp_throttle_args(), url],
         check=False,
         capture_output=True,
         text=True,

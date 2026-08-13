@@ -1,0 +1,25 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: video-rag-routes
+  namespace: video-rag
+  labels:
+    app.kubernetes.io/name: yt-rag-app
+spec:
+  parentRefs:
+    - name: video-rag-private-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /chat
+      backendRefs:
+        - name: chat-service
+          port: 80
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: api-service
+          port: 80

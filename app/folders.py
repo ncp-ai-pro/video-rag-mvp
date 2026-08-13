@@ -1,8 +1,17 @@
+import hashlib
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from . import config
 from .db import connection
-from .services import collect_channel_metadata, enqueue_analysis, upsert_video
+from .services import (
+    collect_channel_metadata,
+    enqueue_analysis,
+    object_storage_is_configured,
+    upload_artifact_bytes,
+    upsert_video,
+)
+from .video_identity import VideoIdentity, extract_youtube_url_mentions
 
 
 def _iso(value):
@@ -154,6 +163,167 @@ def _enqueue_if_needed(video: Dict, *, analyze: bool) -> Optional[Dict]:
     if video["analysis_status"] in ("queued", "running", "ready", "succeeded"):
         return None
     return {"job_id": enqueue_analysis(video["id"]), "status": "queued"}
+
+
+def _placeholder_video(identity: VideoIdentity) -> Dict:
+    return {
+        "platform_video_id": identity.provider_video_id,
+        "title": f"YouTube {identity.provider_video_id}",
+        "description": "",
+        "url": identity.canonical_url,
+        "thumbnail_url": None,
+        "duration_seconds": None,
+        "uploaded_at": None,
+    }
+
+
+def _record_video_analysis_identity(identity: VideoIdentity, video_id: int, analysis_status: str) -> None:
+    with connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO video_analysis_index(
+                provider, provider_video_id, canonical_url, representative_video_id,
+                analysis_status, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            ON CONFLICT(provider, provider_video_id) DO UPDATE SET
+                canonical_url=excluded.canonical_url,
+                representative_video_id=COALESCE(video_analysis_index.representative_video_id, excluded.representative_video_id),
+                updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            """,
+            (
+                identity.provider,
+                identity.provider_video_id,
+                identity.canonical_url,
+                video_id,
+                analysis_status,
+            ),
+        )
+
+
+def import_kakao_links_to_folder(
+    user_id: int,
+    folder_id: int,
+    *,
+    filename: str,
+    content: bytes,
+    analyze: bool,
+    priority: str = "bulk",
+) -> Dict:
+    """Imports YouTube links from a KakaoTalk export without metadata network calls."""
+    required_folder(folder_id, user_id)
+    text = content.decode("utf-8-sig", errors="replace")
+    mentions = extract_youtube_url_mentions(text)
+    unique: List[VideoIdentity] = []
+    seen: set[str] = set()
+    for identity in mentions:
+        if identity.provider_video_id in seen:
+            continue
+        unique.append(identity)
+        seen.add(identity.provider_video_id)
+
+    file_sha256 = hashlib.sha256(content).hexdigest()
+    artifact_key = None
+    if object_storage_is_configured():
+        object_key = f"{config.OBJECT_STORAGE_IMPORT_PREFIX}/folders/{folder_id}/{file_sha256}.txt"
+        artifact_key = upload_artifact_bytes(content, object_key, "text/plain; charset=utf-8")
+
+    with connection() as conn:
+        batch = conn.execute(
+            """
+            INSERT INTO import_batches(
+                user_id, folder_id, filename, file_sha256, artifact_object_key,
+                total_urls, unique_videos, duplicates
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+            """,
+            (
+                user_id,
+                folder_id,
+                filename,
+                file_sha256,
+                artifact_key,
+                len(mentions),
+                len(unique),
+                max(0, len(mentions) - len(unique)),
+            ),
+        ).fetchone()
+        batch_id = batch["id"]
+
+    channel_id = _ensure_manual_channel(user_id)
+    queued_jobs = 0
+    items = []
+    for identity in unique:
+        video_id = upsert_video(channel_id, _placeholder_video(identity), embed_metadata=False)
+        _attach_folder_video(folder_id, video_id, "kakao_import")
+        video = get_workspace_video(user_id, video_id)
+        _record_video_analysis_identity(identity, video_id, video["analysis_status"])
+        job = None
+        item_status = "attached"
+        if analyze and video["analysis_status"] not in ("queued", "running", "ready", "succeeded"):
+            idempotency_key = f"analyze:{user_id}:{identity.provider}:{identity.provider_video_id}"
+            job_id = enqueue_analysis(video_id, priority=priority, idempotency_key=idempotency_key)
+            job = {"job_id": job_id, "status": "queued"}
+            queued_jobs += 1
+            item_status = "queued"
+        elif video["analysis_status"] in ("queued", "running", "ready", "succeeded"):
+            item_status = video["analysis_status"]
+
+        with connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO import_items(
+                    batch_id, folder_id, video_id, job_id, provider, provider_video_id,
+                    source_url, canonical_url, start_seconds_hint, status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    batch_id,
+                    folder_id,
+                    video_id,
+                    job["job_id"] if job else None,
+                    identity.provider,
+                    identity.provider_video_id,
+                    identity.canonical_url,
+                    identity.canonical_url,
+                    identity.start_seconds_hint,
+                    item_status,
+                ),
+            )
+        items.append(
+            {
+                "video_id": video_id,
+                "provider": identity.provider,
+                "provider_video_id": identity.provider_video_id,
+                "canonical_url": identity.canonical_url,
+                "start_seconds_hint": identity.start_seconds_hint,
+                "status": item_status,
+                "job": job,
+            }
+        )
+
+    with connection() as conn:
+        conn.execute(
+            """
+            UPDATE import_batches
+            SET queued_jobs=?
+            WHERE id=?
+            """,
+            (queued_jobs, batch_id),
+        )
+    return {
+        "batch_id": batch_id,
+        "folder_id": folder_id,
+        "filename": filename,
+        "artifact_object_key": artifact_key,
+        "total_urls": len(mentions),
+        "unique_videos": len(unique),
+        "duplicates": max(0, len(mentions) - len(unique)),
+        "queued_jobs": queued_jobs,
+        "items": items,
+    }
 
 
 def add_video_url_to_folder(user_id: int, folder_id: int, url: str, *, analyze: bool, title: Optional[str] = None) -> Dict:

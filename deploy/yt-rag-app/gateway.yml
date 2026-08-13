@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: video-rag-private-gateway
+  namespace: video-rag
+  labels:
+    app.kubernetes.io/name: yt-rag-app
+spec:
+  gatewayClassName: ncloud-alb-private
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same

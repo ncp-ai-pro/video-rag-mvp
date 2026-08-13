@@ -187,6 +187,9 @@ def test_collect_channel_metadata_accepts_single_video_url(monkeypatch):
     videos = services.collect_channel_metadata("https://www.youtube.com/watch?v=eOqXQqg0_Dw")
 
     assert commands[0][1:4] == ["--dump-single-json", "--skip-download", "--no-playlist"]
+    assert "--sleep-requests" in commands[0]
+    assert "--sleep-interval" in commands[0]
+    assert "--max-sleep-interval" in commands[0]
     assert videos == [
         {
             "platform_video_id": "eOqXQqg0_Dw",
@@ -224,7 +227,69 @@ def test_collect_channel_metadata_keeps_flat_playlist_for_channel_urls(monkeypat
     videos = services.collect_channel_metadata("https://www.youtube.com/@example")
 
     assert commands[0][1:4] == ["--flat-playlist", "--dump-json", "--skip-download"]
+    assert "--sleep-requests" in commands[0]
+    assert "--sleep-interval" in commands[0]
+    assert "--max-sleep-interval" in commands[0]
     assert [video["platform_video_id"] for video in videos] == ["video1", "video2"]
+
+
+def test_youtube_rate_limit_reschedules_claimed_job():
+    with tempfile.TemporaryDirectory() as directory:
+        os.environ["DATABASE_PATH"] = os.path.join(directory, "youtube-rate-limit.db")
+        os.environ["EMBEDDING_PROVIDER"] = "mock"
+        os.environ["CHAT_PROVIDER"] = "mock"
+
+        from app import config, db, services, worker, workspaces
+
+        importlib.reload(config)
+        importlib.reload(db)
+        importlib.reload(services)
+        importlib.reload(worker)
+        importlib.reload(workspaces)
+        db.initialize()
+        workspace = workspaces.create_guest_workspace()
+        with db.connection() as conn:
+            channel_id = conn.execute(
+                "INSERT INTO channels(user_id, url, name) VALUES (?, ?, ?) RETURNING id",
+                (workspace["id"], "https://www.youtube.com/@rate-limit", "rate-limit"),
+            ).fetchone()["id"]
+        video_id = services.upsert_video(
+            channel_id,
+            {
+                "platform_video_id": "limited123",
+                "title": "요청 제한 테스트",
+                "description": "YouTube rate-limit 재시도 테스트입니다.",
+                "url": "https://www.youtube.com/watch?v=limited123",
+            },
+        )
+        job_id = services.enqueue_analysis(video_id, priority="bulk", idempotency_key="analysis:limited123")
+        job = worker.claim_job_by_id(job_id)
+
+        error = "video_metadata_failed: ERROR: [youtube] limited123: rate-limited, try again later"
+
+        assert services.is_youtube_rate_limited_error(error)
+        assert services.schedule_job_retry(job, error, delay_seconds=1800)
+
+        with db.connection() as conn:
+            stored = conn.execute("SELECT status, progress_stage, next_run_at, error_message FROM jobs WHERE id=?", (job_id,)).fetchone()
+            video = conn.execute(
+                "SELECT analysis_status, analysis_stage, analysis_message, analysis_error FROM videos WHERE id=?",
+                (video_id,),
+            ).fetchone()
+            pending_outbox = conn.execute(
+                "SELECT COUNT(*) AS count FROM outbox_events WHERE aggregate_id=? AND status='pending'",
+                (job_id,),
+            ).fetchone()["count"]
+
+        assert stored["status"] == "queued"
+        assert stored["progress_stage"] == "queued"
+        assert stored["next_run_at"]
+        assert "rate-limited" in stored["error_message"]
+        assert video["analysis_status"] == "queued"
+        assert video["analysis_stage"] == "queued"
+        assert "30분 뒤" in video["analysis_message"]
+        assert "rate-limited" in video["analysis_error"]
+        assert pending_outbox >= 1
 
 
 def test_guest_workspace_is_restored_or_connected_by_code():
@@ -811,6 +876,58 @@ def test_worker_falls_back_only_when_yt_dlp_reports_no_subtitles(monkeypatch):
         )
         monkeypatch.setattr(worker.subprocess, "run", lambda *args, **kwargs: no_subtitles)
         assert worker.download_subtitles("https://www.youtube.com/watch?v=no-captions", output_dir) is None
+
+
+def test_worker_claims_higher_priority_job_first(monkeypatch):
+    with tempfile.TemporaryDirectory() as directory:
+        monkeypatch.setenv("DATABASE_PATH", os.path.join(directory, "priority.db"))
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setenv("EMBEDDING_PROVIDER", "mock")
+        monkeypatch.setenv("CHAT_PROVIDER", "mock")
+
+        from app import config, db, services, worker, workspaces
+
+        importlib.reload(config)
+        importlib.reload(db)
+        importlib.reload(services)
+        importlib.reload(workspaces)
+        importlib.reload(worker)
+        db.initialize()
+        workspace = workspaces.create_guest_workspace()
+        with db.connection() as conn:
+            channel_id = conn.execute(
+                "INSERT INTO channels(user_id, url, name) VALUES (?, ?, ?) RETURNING id",
+                (workspace["id"], "https://www.youtube.com/@priority", "priority"),
+            ).fetchone()["id"]
+        low_video_id = services.upsert_video(
+            channel_id,
+            {
+                "platform_video_id": "bulk",
+                "title": "bulk",
+                "description": "",
+                "url": "https://www.youtube.com/watch?v=bulk",
+            },
+            embed_metadata=False,
+        )
+        high_video_id = services.upsert_video(
+            channel_id,
+            {
+                "platform_video_id": "ultra",
+                "title": "ultra",
+                "description": "",
+                "url": "https://www.youtube.com/watch?v=ultra",
+            },
+            embed_metadata=False,
+        )
+
+        bulk_job_id = services.enqueue_analysis(low_video_id, priority="bulk")
+        ultra_job_id = services.enqueue_analysis(high_video_id, priority="ultra")
+
+        claimed = worker.claim_job()
+
+        assert claimed["id"] == ultra_job_id
+        assert claimed["id"] != bulk_job_id
+        assert claimed["priority"] == 0
 
 
 def test_worker_reports_youtube_extraction_failure_instead_of_starting_stt(monkeypatch):

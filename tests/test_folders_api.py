@@ -10,13 +10,15 @@ def _reload_app(database_path: str):
     os.environ["EMBEDDING_PROVIDER"] = "mock"
     os.environ["CHAT_PROVIDER"] = "mock"
 
-    from app import config, db, folders, main, services, workspaces
+    from app import analysis_queue, config, db, folders, main, redis_guard, services, workspaces
     from app.routers import folders as folders_router
 
     importlib.reload(config)
     importlib.reload(db)
+    importlib.reload(analysis_queue)
     importlib.reload(services)
     importlib.reload(folders)
+    importlib.reload(redis_guard)
     importlib.reload(workspaces)
     importlib.reload(folders_router)
     importlib.reload(main)
@@ -117,3 +119,68 @@ def test_folder_candidate_can_be_attached_and_used_as_chat_scope():
             assert [message["role"] for message in history] == ["user", "assistant"]
             assert all(message["folder_id"] == folder["id"] for message in history)
             assert workspace["id"] >= 1
+
+
+def test_folder_kakao_import_extracts_unique_youtube_links_without_metadata_fetch():
+    with tempfile.TemporaryDirectory() as directory:
+        db, _, main, _ = _reload_app(os.path.join(directory, "kakao-import.db"))
+
+        kakao_export = "\n".join(
+            [
+                "2026. 8. 12. 오후 1:01, 나 : https://www.youtube.com/watch?v=abc123&t=90s",
+                "2026. 8. 12. 오후 1:02, 나 : https://youtu.be/abc123?t=120",
+                "2026. 8. 12. 오후 1:03, 나 : https://m.youtube.com/shorts/shorts456",
+            ]
+        ).encode("utf-8")
+
+        with TestClient(main.app) as client:
+            folder = client.post("/folders", json={"name": "나에게 보낸 링크", "color": "blue"}).json()
+            response = client.post(
+                f"/folders/{folder['id']}/imports/kakao",
+                files={"file": ("kakao.txt", kakao_export, "text/plain")},
+                data={"analyze": "false", "priority": "bulk"},
+            )
+
+            assert response.status_code == 202
+            body = response.json()
+            assert body["total_urls"] == 3
+            assert body["unique_videos"] == 2
+            assert body["duplicates"] == 1
+            assert body["queued_jobs"] == 0
+            assert [item["provider_video_id"] for item in body["items"]] == ["abc123", "shorts456"]
+
+            videos = client.get(f"/folders/{folder['id']}/videos").json()["items"]
+            assert len(videos) == 2
+            assert {video["analysis_status"] for video in videos} == {"metadata_only"}
+            snapshot = client.get("/ops/queue").json()
+            assert snapshot["import_batches"] == [{"status": "completed", "count": 1}]
+
+        with db.connection() as conn:
+            assert conn.execute("SELECT COUNT(*) AS count FROM import_batches").fetchone()["count"] == 1
+            assert conn.execute("SELECT COUNT(*) AS count FROM import_items").fetchone()["count"] == 2
+
+
+def test_folder_kakao_import_can_enqueue_bulk_priority_jobs():
+    with tempfile.TemporaryDirectory() as directory:
+        db, _, main, _ = _reload_app(os.path.join(directory, "kakao-import-analyze.db"))
+
+        with TestClient(main.app) as client:
+            folder = client.post("/folders", json={"name": "대량 분석", "color": "green"}).json()
+            response = client.post(
+                f"/folders/{folder['id']}/imports/kakao",
+                files={"file": ("kakao.txt", b"https://www.youtube.com/watch?v=bulk123", "text/plain")},
+                data={"analyze": "true", "priority": "bulk"},
+            )
+
+            assert response.status_code == 202
+            body = response.json()
+            assert body["queued_jobs"] == 1
+            assert body["items"][0]["status"] == "queued"
+
+        with db.connection() as conn:
+            job = conn.execute("SELECT kind, status, priority, idempotency_key FROM jobs").fetchone()
+            assert job["kind"] == "analyze_video"
+            assert job["status"] == "queued"
+            assert job["priority"] == 500
+            assert job["idempotency_key"].endswith(":youtube:bulk123")
+            assert conn.execute("SELECT COUNT(*) AS count FROM outbox_events").fetchone()["count"] == 1

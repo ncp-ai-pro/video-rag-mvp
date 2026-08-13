@@ -63,6 +63,41 @@ def health():
     return {"status": "ok", "queue": "sqlite job table", "mode": "sqlite"}
 
 
+@app.get("/ops/queue")
+def ops_queue_snapshot():
+    """Small DB-backed queue snapshot for smoke checks before full monitoring."""
+    with connection() as conn:
+        jobs = conn.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM jobs
+            GROUP BY status
+            ORDER BY status
+            """
+        ).fetchall()
+        imports = conn.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM import_batches
+            GROUP BY status
+            ORDER BY status
+            """
+        ).fetchall()
+        outbox = conn.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM outbox_events
+            GROUP BY status
+            ORDER BY status
+            """
+        ).fetchall()
+    return {
+        "jobs": [dict(row) for row in jobs],
+        "import_batches": [dict(row) for row in imports],
+        "outbox_events": [dict(row) for row in outbox],
+    }
+
+
 @app.get("/", include_in_schema=False)
 def index():
     return FileResponse(STATIC_DIR / "index.html")

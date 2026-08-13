@@ -15,22 +15,74 @@ services:
       retries: 10
       start_period: 5s
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    environment:
+      RABBITMQ_DEFAULT_USER: video_rag
+      RABBITMQ_DEFAULT_PASS: video_rag_local
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - video-rag-rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
   api:
     environment:
       DATABASE_URL: postgresql://video_rag:video_rag_local@postgres:5432/video_rag
+      REDIS_URL: redis://redis:6379/0
+      ANALYSIS_QUEUE_PROVIDER: rabbitmq
+      RABBITMQ_URL: amqp://video_rag:video_rag_local@rabbitmq:5672/%2F
       CHAT_PUBLIC_ORIGIN: http://localhost:8001
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   chat:
     environment:
       DATABASE_URL: postgresql://video_rag:video_rag_local@postgres:5432/video_rag
+      REDIS_URL: redis://redis:6379/0
       CORS_ALLOW_ORIGINS: http://localhost:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   worker:
     environment:
       DATABASE_URL: postgresql://video_rag:video_rag_local@postgres:5432/video_rag
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://video_rag:video_rag_local@rabbitmq:5672/%2F
+      WORKER_QUEUE_MODE: rabbitmq
+      WORKER_PREFETCH_COUNT: 1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
 
 volumes:
   video-rag-postgres-data:
+  video-rag-rabbitmq-data:
