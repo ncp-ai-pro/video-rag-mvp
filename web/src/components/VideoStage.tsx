@@ -1,7 +1,6 @@
 import { type Ref } from 'react'
-import { MonitorPlay, PlayCircle } from 'lucide-react'
+import { Loader2, MonitorPlay, PlayCircle } from 'lucide-react'
 
-import { AnalysisProgress } from '@/components/AnalysisProgress'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Player, type PlayerHandle } from '@/components/Player'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -21,16 +20,27 @@ export function VideoStage({ video, playerRef, onAnalyze }: Props) {
       <div className="grid flex-1 place-items-center text-center text-muted-foreground">
         <div className="space-y-3">
           <PlayCircle className="mx-auto size-10 opacity-40" />
-          <p className="text-sm">왼쪽에서 영상을 선택하면 여기에 재생됩니다.</p>
+          <p className="text-sm">영상 목록에서 선택하면 여기에 재생됩니다.</p>
         </div>
       </div>
     )
   }
 
+  // 전체 분석 진행 UI는 가운데 채팅 패널에서 보여준다(이 패널은 폭이 좁아 잘려 보였다).
+  // 여기는 재생 영역 자리만 스피너로 대신 채워 레이아웃이 흔들리지 않게 한다.
   if (isAnalysisActive(video.analysis_status)) {
     return (
-      <div className="grid flex-1 place-items-center">
-        <AnalysisProgress video={video} />
+      <div className="flex flex-1 flex-col gap-3">
+        <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-xl border border-border/60 bg-muted/30 p-4 text-center">
+          <Loader2 className="size-8 animate-spin text-primary" />
+          <p className="text-sm font-medium">분석 중</p>
+          <p className="line-clamp-2 text-xs text-muted-foreground">
+            {video.analysis_message ?? '잠시만 기다려주세요.'}
+          </p>
+        </div>
+        <div>
+          <p className="font-medium leading-snug">{video.title}</p>
+        </div>
       </div>
     )
   }
