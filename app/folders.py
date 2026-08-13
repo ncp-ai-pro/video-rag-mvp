@@ -5,13 +5,14 @@ from typing import Dict, List, Optional
 from . import config
 from .db import connection
 from .services import (
-    collect_channel_metadata,
+    ANALYSIS_MESSAGES,
+    enqueue,
     enqueue_analysis,
     object_storage_is_configured,
     upload_artifact_bytes,
     upsert_video,
 )
-from .video_identity import VideoIdentity, extract_youtube_url_mentions
+from .video_identity import VideoIdentity, extract_youtube_url_mentions, normalize_youtube_url
 
 
 def _iso(value):
@@ -201,6 +202,22 @@ def _record_video_analysis_identity(identity: VideoIdentity, video_id: int, anal
         )
 
 
+def _find_manual_video(channel_id: int, provider_video_id: str) -> Optional[int]:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM videos WHERE channel_id=? AND platform_video_id=?",
+            (channel_id, provider_video_id),
+        ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def _ensure_placeholder_video(channel_id: int, identity: VideoIdentity) -> int:
+    existing_id = _find_manual_video(channel_id, identity.provider_video_id)
+    if existing_id:
+        return existing_id
+    return upsert_video(channel_id, _placeholder_video(identity), embed_metadata=False)
+
+
 def import_kakao_links_to_folder(
     user_id: int,
     folder_id: int,
@@ -255,7 +272,7 @@ def import_kakao_links_to_folder(
     queued_jobs = 0
     items = []
     for identity in unique:
-        video_id = upsert_video(channel_id, _placeholder_video(identity), embed_metadata=False)
+        video_id = _ensure_placeholder_video(channel_id, identity)
         _attach_folder_video(folder_id, video_id, "kakao_import")
         video = get_workspace_video(user_id, video_id)
         _record_video_analysis_identity(identity, video_id, video["analysis_status"])
@@ -328,14 +345,57 @@ def import_kakao_links_to_folder(
 
 def add_video_url_to_folder(user_id: int, folder_id: int, url: str, *, analyze: bool, title: Optional[str] = None) -> Dict:
     required_folder(folder_id, user_id)
-    metadata = collect_channel_metadata(url)[0]
-    if title:
-        metadata["title"] = title
+    identity = normalize_youtube_url(url)
+    if not identity:
+        raise RuntimeError("unsupported_video_url: only YouTube video URLs are supported")
     channel_id = _ensure_manual_channel(user_id)
-    video_id = upsert_video(channel_id, metadata)
+    existing_id = _find_manual_video(channel_id, identity.provider_video_id)
+    video_id = existing_id or upsert_video(channel_id, _placeholder_video(identity), embed_metadata=False)
     folder_video = _attach_folder_video(folder_id, video_id, "direct")
     video = get_workspace_video(user_id, video_id)
-    job = _enqueue_if_needed(video, analyze=analyze)
+    _record_video_analysis_identity(identity, video_id, video["analysis_status"])
+    job = None
+    if existing_id and video["analysis_status"] not in ("metadata_pending",):
+        job = _enqueue_if_needed(video, analyze=analyze)
+    elif not existing_id or video["analysis_status"] == "metadata_pending":
+        priority = "manual"
+        idempotency_key = f"ingest:{user_id}:{identity.provider}:{identity.provider_video_id}"
+        analysis_idempotency_key = f"analyze:{user_id}:{identity.provider}:{identity.provider_video_id}"
+        job_id = enqueue(
+            "ingest_video",
+            video_id,
+            priority=priority,
+            idempotency_key=idempotency_key,
+            payload={
+                "analyze": analyze,
+                "analysis_priority": priority,
+                "analysis_idempotency_key": analysis_idempotency_key,
+                "title_override": title,
+            },
+        )
+        with connection() as conn:
+            conn.execute(
+                """
+                UPDATE videos
+                SET title=COALESCE(NULLIF(CAST(? AS TEXT), ''), title),
+                    analysis_status='metadata_pending',
+                    analysis_stage='metadata_pending',
+                    analysis_message=?,
+                    analysis_error=NULL,
+                    analysis_updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id=?
+                """,
+                (title, ANALYSIS_MESSAGES["metadata_pending"], video_id),
+            )
+            conn.execute(
+                """
+                UPDATE video_analysis_index
+                SET analysis_status='metadata_pending', last_job_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE representative_video_id=?
+                """,
+                (job_id, video_id),
+            )
+        job = {"job_id": job_id, "kind": "ingest_video", "status": "queued"}
     if job:
         video = get_workspace_video(user_id, video_id)
     return {"video": video, "folder_video": folder_video, "job": job}

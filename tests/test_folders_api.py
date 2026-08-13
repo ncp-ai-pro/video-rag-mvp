@@ -27,22 +27,7 @@ def _reload_app(database_path: str):
 
 def test_folder_direct_video_url_creates_manual_video_and_analysis_job(monkeypatch):
     with tempfile.TemporaryDirectory() as directory:
-        _, folder_services, main, _ = _reload_app(os.path.join(directory, "folder-direct.db"))
-
-        def fake_collect(url: str):
-            return [
-                {
-                    "platform_video_id": "direct123",
-                    "title": "LangGraph RAG 직접 추가",
-                    "description": "폴더에 단일 영상 링크를 추가합니다.",
-                    "url": url,
-                    "thumbnail_url": None,
-                    "duration_seconds": 321,
-                    "uploaded_at": "20260812",
-                }
-            ]
-
-        monkeypatch.setattr(folder_services, "collect_channel_metadata", fake_collect)
+        db, _, main, _ = _reload_app(os.path.join(directory, "folder-direct.db"))
 
         with TestClient(main.app) as client:
             folder = client.post("/folders", json={"name": "LangGraph RAG", "color": "amber"}).json()
@@ -54,13 +39,19 @@ def test_folder_direct_video_url_creates_manual_video_and_analysis_job(monkeypat
 
             assert created.status_code == 201
             body = created.json()
-            assert body["video"]["title"] == "LangGraph RAG 직접 추가"
-            assert body["video"]["analysis_status"] == "queued"
+            assert body["video"]["title"] == "YouTube direct123"
+            assert body["video"]["analysis_status"] == "metadata_pending"
             assert body["folder_video"]["source"] == "direct"
             assert body["job"]["status"] == "queued"
+            assert body["job"]["kind"] == "ingest_video"
 
             videos = client.get(f"/folders/{folder['id']}/videos").json()["items"]
             assert [video["id"] for video in videos] == [body["video"]["id"]]
+
+        with db.connection() as conn:
+            job = conn.execute("SELECT kind, payload_json FROM jobs").fetchone()
+        assert job["kind"] == "ingest_video"
+        assert '"analyze":true' in job["payload_json"]
 
 
 def test_folder_candidate_can_be_attached_and_used_as_chat_scope():

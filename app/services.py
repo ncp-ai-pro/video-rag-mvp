@@ -18,6 +18,8 @@ from .db import connection, is_postgres
 
 ANALYSIS_MESSAGES = {
     "queued": "분석 작업을 기다리고 있습니다.",
+    "metadata_pending": "영상 정보를 가져오고 있습니다.",
+    "metadata_only": "영상 정보 수집이 완료되었습니다.",
     "downloading_caption": "자막을 수집하고 있습니다.",
     "transcribing": "자막이 없어 음성을 텍스트로 변환하고 있습니다.",
     "chunking": "자막을 검색 가능한 구간으로 나누고 있습니다.",
@@ -303,12 +305,24 @@ def _insert_outbox_event(conn, job_id: int, kind: str, priority: str, idempotenc
 def publish_job_signal(job_id: int, kind: str, priority: str, idempotency_key: Optional[str]) -> bool:
     """Wake RabbitMQ consumers when enabled; DB remains the durable queue."""
     try:
-        return analysis_queue.publish_analysis_job(
+        published = analysis_queue.publish_analysis_job(
             job_id=job_id,
             kind=kind,
             priority=priority,
             idempotency_key=idempotency_key or f"{kind}:{job_id}",
         )
+        if published:
+            with connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE outbox_events
+                    SET status='published', published_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                        updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    WHERE aggregate_type='job' AND aggregate_id=? AND status='pending'
+                    """,
+                    (job_id,),
+                )
+        return published
     except Exception as exc:
         with connection() as conn:
             conn.execute(
@@ -379,6 +393,17 @@ def _job_retry_timestamp(delay_seconds: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _merge_job_payload(current_json: Optional[str], incoming: Dict) -> str:
+    try:
+        current = json.loads(current_json or "{}")
+    except json.JSONDecodeError:
+        current = {}
+    merged = {**current, **incoming}
+    if current.get("analyze") or incoming.get("analyze"):
+        merged["analyze"] = True
+    return json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
+
+
 def schedule_job_retry(job: Dict, error: str, *, delay_seconds: Optional[int] = None) -> bool:
     """Move a running job back to queued with a future next_run_at.
 
@@ -409,49 +434,72 @@ def schedule_job_retry(job: Dict, error: str, *, delay_seconds: Optional[int] = 
             """,
             (message, str(error)[:2000], next_run_at, job_id),
         )
-        if job["kind"] == "analyze_video":
+        if job["kind"] in ("analyze_video", "ingest_video"):
             conn.execute(
                 """
                 UPDATE videos
-                SET analysis_status='queued', analysis_stage='queued', analysis_message=?,
+                SET analysis_status=CASE WHEN ?='ingest_video' THEN 'metadata_pending' ELSE 'queued' END,
+                    analysis_stage=CASE WHEN ?='ingest_video' THEN 'metadata_pending' ELSE 'queued' END,
+                    analysis_message=?,
                     analysis_error=?, analysis_updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                 WHERE id=?
                 """,
-                (message, str(error)[:2000], job["resource_id"]),
+                (job["kind"], job["kind"], message, str(error)[:2000], job["resource_id"]),
             )
             conn.execute(
                 """
                 UPDATE video_analysis_index
-                SET analysis_status='queued', last_job_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                SET analysis_status=CASE WHEN ?='ingest_video' THEN 'metadata_pending' ELSE 'queued' END,
+                    last_job_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                 WHERE representative_video_id=?
                 """,
-                (job_id, job["resource_id"]),
+                (job["kind"], job_id, job["resource_id"]),
             )
         _insert_outbox_event(conn, job_id, job["kind"], priority, idempotency_key)
     return True
 
 
-def enqueue(kind: str, resource_id: int, *, priority: str = "normal", idempotency_key: Optional[str] = None) -> int:
+def enqueue(
+    kind: str,
+    resource_id: int,
+    *,
+    priority: str = "normal",
+    idempotency_key: Optional[str] = None,
+    payload: Optional[Dict] = None,
+) -> int:
     db_priority = analysis_queue.priority_values(priority)["database"]
+    payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) if payload is not None else None
     with connection() as conn:
         if idempotency_key:
             existing = conn.execute(
                 """
-                SELECT id FROM jobs
+                SELECT id, payload_json FROM jobs
                 WHERE idempotency_key=? AND status IN ('queued', 'running')
                 ORDER BY id DESC LIMIT 1
                 """,
                 (idempotency_key,),
             ).fetchone()
             if existing:
+                if payload is not None:
+                    conn.execute(
+                        """
+                        UPDATE jobs
+                        SET payload_json=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                        WHERE id=?
+                        """,
+                        (_merge_job_payload(existing["payload_json"], payload), existing["id"]),
+                    )
                 return existing["id"]
         row = conn.execute(
             """
-            INSERT INTO jobs(kind, resource_id, priority, idempotency_key, progress_stage, progress_message, updated_at)
-            VALUES (?, ?, ?, ?, 'queued', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            INSERT INTO jobs(
+                kind, resource_id, priority, idempotency_key, payload_json,
+                progress_stage, progress_message, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 'queued', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             RETURNING id
             """,
-            (kind, resource_id, db_priority, idempotency_key, ANALYSIS_MESSAGES["queued"]),
+            (kind, resource_id, db_priority, idempotency_key, payload_json, ANALYSIS_MESSAGES["queued"]),
         ).fetchone()
         job_id = row["id"]
         _insert_outbox_event(conn, job_id, kind, priority, idempotency_key)
@@ -605,7 +653,7 @@ def analysis_event_state(video_id: int, user_id: int) -> Optional[Dict]:
             JOIN channels ON channels.id=videos.channel_id
             LEFT JOIN jobs ON jobs.id=(
                 SELECT id FROM jobs
-                WHERE kind='analyze_video' AND resource_id=videos.id
+                WHERE kind IN ('ingest_video', 'analyze_video') AND resource_id=videos.id
                 ORDER BY id DESC LIMIT 1
             )
             WHERE videos.id=? AND channels.user_id=?

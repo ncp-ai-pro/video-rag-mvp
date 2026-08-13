@@ -40,6 +40,8 @@ priority=bulk|normal|manual|ultra
 
 성공 응답은 `202 Accepted`이며, `batch_id`, `total_urls`, `unique_videos`, `duplicates`, `queued_jobs`, `items[]`를 반환한다. `analyze=false`는 영상 목록만 만든다. `analyze=true`는 `jobs`에 durable row를 만들고, RabbitMQ가 켜져 있으면 같은 job id를 priority queue로 publish한다.
 
+단일 영상 추가 API인 `POST /folders/{folder_id}/videos`도 사용자 HTTP 요청 안에서 `yt-dlp` metadata 수집을 하지 않는다. API는 `videos.analysis_status='metadata_pending'` placeholder와 `jobs.kind='ingest_video'`를 저장한다. Worker가 `ingest_video`를 소비해 metadata를 수집하고, job payload의 `analyze=true`를 확인한 경우에만 후속 `analyze_video` job을 만든다. YouTube rate-limit이면 기존 분석 job과 같이 `jobs.next_run_at`으로 재시도 시간을 미룬다.
+
 각 성공 응답에서 `batch_id`, `total_urls`, `unique_videos`, `duplicates`, `queued_jobs`를 보관한다. 예상과 다른 중복 수는 parser 정규화 또는 DB idempotency 문제를 구분할 근거가 된다. 테스트 후에는 생성한 test workspace 또는 batch 데이터를 별도 절차로 삭제한다. 운영 사용자 workspace에 테스트 파일을 올리지 않는다.
 
 ## 로컬 Docker 관찰

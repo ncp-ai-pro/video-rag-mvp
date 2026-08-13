@@ -292,6 +292,145 @@ def test_youtube_rate_limit_reschedules_claimed_job():
         assert pending_outbox >= 1
 
 
+def test_worker_ingest_video_fetches_metadata_then_queues_analysis(monkeypatch):
+    with tempfile.TemporaryDirectory() as directory:
+        monkeypatch.setenv("DATABASE_PATH", os.path.join(directory, "ingest-video.db"))
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setenv("EMBEDDING_PROVIDER", "mock")
+        monkeypatch.setenv("CHAT_PROVIDER", "mock")
+        monkeypatch.setenv("ANALYSIS_QUEUE_PROVIDER", "postgres")
+
+        from app import config, db, services, worker, workspaces
+
+        importlib.reload(config)
+        importlib.reload(db)
+        importlib.reload(services)
+        importlib.reload(workspaces)
+        importlib.reload(worker)
+        db.initialize()
+        workspace = workspaces.create_guest_workspace()
+        with db.connection() as conn:
+            channel_id = conn.execute(
+                "INSERT INTO channels(user_id, url, name) VALUES (?, ?, ?) RETURNING id",
+                (workspace["id"], "internal://manual", "manual"),
+            ).fetchone()["id"]
+        video_id = services.upsert_video(
+            channel_id,
+            {
+                "platform_video_id": "ingest123",
+                "title": "YouTube ingest123",
+                "description": "",
+                "url": "https://www.youtube.com/watch?v=ingest123",
+            },
+            embed_metadata=False,
+        )
+        job_id = services.enqueue(
+            "ingest_video",
+            video_id,
+            priority="manual",
+            idempotency_key="ingest:youtube:ingest123",
+            payload={
+                "analyze": True,
+                "analysis_priority": "manual",
+                "analysis_idempotency_key": "analyze:youtube:ingest123",
+            },
+        )
+
+        monkeypatch.setattr(
+            worker,
+            "collect_channel_metadata",
+            lambda url: [
+                {
+                    "platform_video_id": "ingest123",
+                    "title": "수집 완료 영상",
+                    "description": "Worker가 수집한 metadata입니다.",
+                    "url": url,
+                    "thumbnail_url": None,
+                    "duration_seconds": 123,
+                    "uploaded_at": "20260813",
+                }
+            ],
+        )
+
+        claimed = worker.claim_job_by_id(job_id)
+
+        assert claimed["kind"] == "ingest_video"
+        assert worker._run_claimed_job(claimed)
+
+        with db.connection() as conn:
+            jobs = conn.execute("SELECT kind, status FROM jobs ORDER BY id").fetchall()
+            video = conn.execute(
+                "SELECT title, duration_seconds, analysis_status, analysis_stage FROM videos WHERE id=?",
+                (video_id,),
+            ).fetchone()
+
+        assert [dict(job) for job in jobs] == [
+            {"kind": "ingest_video", "status": "succeeded"},
+            {"kind": "analyze_video", "status": "queued"},
+        ]
+        assert dict(video) == {
+            "title": "수집 완료 영상",
+            "duration_seconds": 123,
+            "analysis_status": "queued",
+            "analysis_stage": "queued",
+        }
+
+
+def test_duplicate_ingest_job_merges_analyze_payload(monkeypatch):
+    with tempfile.TemporaryDirectory() as directory:
+        monkeypatch.setenv("DATABASE_PATH", os.path.join(directory, "ingest-merge.db"))
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setenv("EMBEDDING_PROVIDER", "mock")
+        monkeypatch.setenv("CHAT_PROVIDER", "mock")
+        monkeypatch.setenv("ANALYSIS_QUEUE_PROVIDER", "postgres")
+
+        from app import config, db, services, workspaces
+
+        importlib.reload(config)
+        importlib.reload(db)
+        importlib.reload(services)
+        importlib.reload(workspaces)
+        db.initialize()
+        workspace = workspaces.create_guest_workspace()
+        with db.connection() as conn:
+            channel_id = conn.execute(
+                "INSERT INTO channels(user_id, url, name) VALUES (?, ?, ?) RETURNING id",
+                (workspace["id"], "internal://manual", "manual"),
+            ).fetchone()["id"]
+        video_id = services.upsert_video(
+            channel_id,
+            {
+                "platform_video_id": "merge123",
+                "title": "YouTube merge123",
+                "description": "",
+                "url": "https://www.youtube.com/watch?v=merge123",
+            },
+            embed_metadata=False,
+        )
+
+        first_job_id = services.enqueue(
+            "ingest_video",
+            video_id,
+            idempotency_key="ingest:youtube:merge123",
+            payload={"analyze": False},
+        )
+        second_job_id = services.enqueue(
+            "ingest_video",
+            video_id,
+            idempotency_key="ingest:youtube:merge123",
+            payload={"analyze": True, "analysis_idempotency_key": "analyze:youtube:merge123"},
+        )
+
+        with db.connection() as conn:
+            payload = conn.execute("SELECT payload_json FROM jobs WHERE id=?", (first_job_id,)).fetchone()["payload_json"]
+            job_count = conn.execute("SELECT COUNT(*) AS count FROM jobs").fetchone()["count"]
+
+        assert second_job_id == first_job_id
+        assert job_count == 1
+        assert json.loads(payload)["analyze"] is True
+        assert json.loads(payload)["analysis_idempotency_key"] == "analyze:youtube:merge123"
+
+
 def test_guest_workspace_is_restored_or_connected_by_code():
     with tempfile.TemporaryDirectory() as directory:
         os.environ["DATABASE_PATH"] = os.path.join(directory, "workspace.db")

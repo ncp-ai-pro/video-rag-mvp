@@ -8,7 +8,7 @@ export interface Workspace {
   workspace_code: string;
 }
 
-/** jobs.status와 동일한 어휘 */
+/** videos.analysis_status와 화면에서 쓰는 상태 어휘 */
 export type AnalysisStatus =
   /** URL만 접수되고 Worker가 아직 yt-dlp로 metadata(제목·썸네일 등)를 못 가져온 상태.
    *  title은 백엔드가 이미 "영상 정보를 가져오는 중" 같은 placeholder 문자열로 채워서 준다. */
@@ -155,7 +155,7 @@ export const isAnalyzed = (status: AnalysisStatus) =>
   status === "succeeded" || status === "ready";
 
 export const isAnalysisActive = (status: AnalysisStatus) =>
-  status === "queued" || status === "running";
+  status === "metadata_pending" || status === "queued" || status === "running";
 
 /** metadata(제목·썸네일)조차 아직 없는, analysis 파이프라인 이전 단계. */
 export const isMetadataPending = (status: AnalysisStatus) => status === "metadata_pending";

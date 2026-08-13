@@ -54,6 +54,7 @@ export const STATUS_LABEL: Record<AnalysisStatus, string> = {
 
 /** 진행률 표시용. 실제 백분율이 아니라 stage 순서 기반 근사치다. */
 const STAGE_ORDER: AnalysisStage[] = [
+  'metadata_pending',
   'queued',
   'downloading_caption',
   'transcribing',

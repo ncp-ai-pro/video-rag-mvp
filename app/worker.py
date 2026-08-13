@@ -15,6 +15,7 @@ from .services import (
     ANALYSIS_MESSAGES,
     EmbeddingRateLimiter,
     collect_channel_metadata,
+    enqueue_analysis,
     finish_analysis,
     has_video_embedding,
     import_transcript,
@@ -117,6 +118,26 @@ def _mark_job_running(conn, row):
             """,
             (ANALYSIS_MESSAGES["downloading_caption"], row["resource_id"]),
         )
+    elif row["kind"] == "ingest_video":
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status='running', progress_stage='metadata_pending', progress_message=?,
+                attempts=attempts+1, started_at=CURRENT_TIMESTAMP, locked_at=CURRENT_TIMESTAMP,
+                locked_by=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id=?
+            """,
+            (ANALYSIS_MESSAGES["metadata_pending"], worker_id, row["id"]),
+        )
+        conn.execute(
+            """
+            UPDATE videos
+            SET analysis_status='metadata_pending', analysis_stage='metadata_pending', analysis_message=?,
+                analysis_error=NULL, analysis_updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id=?
+            """,
+            (ANALYSIS_MESSAGES["metadata_pending"], row["resource_id"]),
+        )
     else:
         conn.execute(
             """
@@ -187,6 +208,55 @@ def finish_scan(job_id: int, error: str = None):
             )
 
 
+def _job_payload(job) -> dict:
+    try:
+        return json.loads(job.get("payload_json") or "{}")
+    except json.JSONDecodeError:
+        return {}
+
+
+def finish_ingest(job_id: int, video_id: int, error: str = None):
+    with connection() as conn:
+        if error:
+            message = error[:2000]
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status='failed', error_message=?, progress_stage='failed', progress_message=?,
+                    finished_at=CURRENT_TIMESTAMP, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id=?
+                """,
+                (message, message, job_id),
+            )
+            conn.execute(
+                """
+                UPDATE videos
+                SET analysis_status='failed', analysis_stage='failed', analysis_message=?,
+                    analysis_error=?, analysis_updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id=?
+                """,
+                (message, message, video_id),
+            )
+            conn.execute(
+                """
+                UPDATE video_analysis_index
+                SET analysis_status='failed', last_job_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE representative_video_id=?
+                """,
+                (job_id, video_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status='succeeded', progress_stage='completed', progress_message='영상 정보 수집이 완료되었습니다.',
+                    finished_at=CURRENT_TIMESTAMP, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id=?
+                """,
+                (job_id,),
+            )
+
+
 def scan_channel(channel_id: int):
     with connection() as conn:
         channel = conn.execute("SELECT url FROM channels WHERE id=?", (channel_id,)).fetchone()
@@ -196,6 +266,53 @@ def scan_channel(channel_id: int):
         upsert_video(channel_id, video)
     with connection() as conn:
         conn.execute("UPDATE channels SET last_scanned_at=CURRENT_TIMESTAMP WHERE id=?", (channel_id,))
+
+
+def ingest_video(job_id: int, video_id: int, payload: dict):
+    with connection() as conn:
+        row = conn.execute(
+            """
+            SELECT videos.*, channels.user_id
+            FROM videos JOIN channels ON channels.id=videos.channel_id
+            WHERE videos.id=?
+            """,
+            (video_id,),
+        ).fetchone()
+    if not row:
+        raise RuntimeError("video not found")
+
+    metadata = collect_channel_metadata(row["url"])[0]
+    title_override = payload.get("title_override")
+    if title_override:
+        metadata["title"] = title_override
+    updated_video_id = upsert_video(row["channel_id"], metadata)
+    if updated_video_id != video_id:
+        raise RuntimeError("ingest_video_identity_mismatch")
+
+    with connection() as conn:
+        conn.execute(
+            """
+            UPDATE videos
+            SET analysis_status='metadata_only', analysis_stage='metadata_only', analysis_message=?,
+                analysis_error=NULL, analysis_updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id=?
+            """,
+            (ANALYSIS_MESSAGES["metadata_only"], video_id),
+        )
+        conn.execute(
+            """
+            UPDATE video_analysis_index
+            SET analysis_status='metadata_only', last_job_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE representative_video_id=?
+            """,
+            (job_id, video_id),
+        )
+
+    if payload.get("analyze"):
+        priority = payload.get("analysis_priority") or "manual"
+        idempotency_key = payload.get("analysis_idempotency_key")
+        return enqueue_analysis(video_id, priority=priority, idempotency_key=idempotency_key)
+    return None
 
 
 def artifact_key(video_id: int, job_id: int, name: str) -> str:
@@ -477,6 +594,9 @@ def run_once():
         if job["kind"] == "scan_channel":
             scan_channel(job["resource_id"])
             finish_scan(job["id"])
+        elif job["kind"] == "ingest_video":
+            ingest_video(job["id"], job["resource_id"], _job_payload(job))
+            finish_ingest(job["id"], job["resource_id"])
         else:
             analyze_video(job["id"], job["resource_id"])
             finish_analysis(job["id"], job["resource_id"])
@@ -485,6 +605,8 @@ def run_once():
             return True
         if job["kind"] == "analyze_video":
             finish_analysis(job["id"], job["resource_id"], str(exc))
+        elif job["kind"] == "ingest_video":
+            finish_ingest(job["id"], job["resource_id"], str(exc))
         else:
             finish_scan(job["id"], str(exc))
     return True
@@ -495,6 +617,9 @@ def _run_claimed_job(job) -> bool:
         if job["kind"] == "scan_channel":
             scan_channel(job["resource_id"])
             finish_scan(job["id"])
+        elif job["kind"] == "ingest_video":
+            ingest_video(job["id"], job["resource_id"], _job_payload(job))
+            finish_ingest(job["id"], job["resource_id"])
         else:
             analyze_video(job["id"], job["resource_id"])
             finish_analysis(job["id"], job["resource_id"])
@@ -503,6 +628,8 @@ def _run_claimed_job(job) -> bool:
             return True
         if job["kind"] == "analyze_video":
             finish_analysis(job["id"], job["resource_id"], str(exc))
+        elif job["kind"] == "ingest_video":
+            finish_ingest(job["id"], job["resource_id"], str(exc))
         else:
             finish_scan(job["id"], str(exc))
     return True
