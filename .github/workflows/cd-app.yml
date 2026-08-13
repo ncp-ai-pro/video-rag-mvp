@@ -105,8 +105,12 @@ jobs:
           PY
           )"
 
-          git clone "${auth_repo_url}" manifest-repo
+          git clone --branch main --single-branch "${auth_repo_url}" manifest-repo
           cd manifest-repo
+
+          test -f deploy/yt-rag-app/api-deployment.yml
+          test -f deploy/yt-rag-app/chat-deployment.yml
+          test -f deploy/yt-rag-app/worker-deployment.yml
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
