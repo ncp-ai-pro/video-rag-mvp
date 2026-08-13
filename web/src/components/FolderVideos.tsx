@@ -169,7 +169,7 @@ export function FolderVideos({ selectedFolderId, selectedVideoId, onSelectVideo,
               <Plus />
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-lg">
+          <DialogContent className="sm:max-w-2xl">
             <DialogHeader>
               <DialogTitle>영상 추가</DialogTitle>
               <DialogDescription>URL을 직접 넣거나, 채널을 연결해서 새 영상을 자동으로 수집합니다.</DialogDescription>

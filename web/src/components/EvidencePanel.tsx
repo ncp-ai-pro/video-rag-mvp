@@ -17,7 +17,11 @@ interface Props {
   onSeek: (youtubeId: string, seconds: number) => void;
 }
 
-/** 형광펜 효과: 텍스트 아래쪽만 노란 배경을 깔아 마커로 칠한 것처럼 보이게 한다. */
+/**
+ * 형광펜 효과. 배경·글씨색을 라이트/다크 테마와 무관하게 고정한다(실제 형광펜처럼).
+ * 이전엔 text-foreground를 썼는데, 다크모드에서 흰 글씨가 노란 배경 위에서 안 보였고,
+ * 그라데이션 stop(40%/40%)이 겹쳐서 경계에 브라우저마다 다른 색 번짐이 생겼다.
+ */
 function quoteWithHighlight(item: Evidence) {
   const quote = item.quote;
   const highlight = item.highlight?.text;
@@ -27,7 +31,7 @@ function quoteWithHighlight(item: Evidence) {
   return (
     <>
       {quote.slice(0, index)}
-      <mark className="rounded-[2px] bg-gradient-to-t from-yellow-300/60 from-40% to-transparent to-40% px-0.5 text-foreground">
+      <mark className="rounded-[2px] bg-yellow-300 px-0.5 text-yellow-950">
         {highlight}
       </mark>
       {quote.slice(index + highlight.length)}

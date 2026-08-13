@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -16,15 +16,17 @@ import {
   SidebarContent,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar'
 import { useFolders } from '@/hooks/queries/folder/use-folders'
 import { useCreateFolder } from '@/hooks/mutations/folder/use-create-folder'
+import { useDeleteFolder } from '@/hooks/mutations/folder/use-delete-folder'
 
 interface Props {
   selectedFolderId: number | null
-  onSelectFolder: (folderId: number) => void
+  onSelectFolder: (folderId: number | null) => void
   onError: (message: string) => void
 }
 
@@ -39,9 +41,13 @@ export function Sidebar({ selectedFolderId, onSelectFolder, onError }: Props) {
     onError: () => onError('폴더 생성에 실패했습니다.'),
     onSettled: (folder) => onSelectFolder(folder.id),
   })
+  const deleteFolderMutation = useDeleteFolder({
+    onError: () => onError('폴더 삭제에 실패했습니다.'),
+  })
 
   const [name, setName] = useState('')
   const [addOpen, setAddOpen] = useState(false)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
 
   // 이름만으로 빠르게 만든다. 영상은 만든 직후 폴더 안 "영상 추가" 다이얼로그에서 넣는다.
   const addFolder = (event: React.FormEvent) => {
@@ -52,6 +58,22 @@ export function Sidebar({ selectedFolderId, onSelectFolder, onError }: Props) {
         setName('')
         setAddOpen(false)
       },
+    })
+  }
+
+  // 삭제된 폴더가 선택 중이었으면 남은 폴더 중 하나로 옮기고, 없으면 선택을 비운다.
+  const handleDelete = (event: React.MouseEvent, folderId: number) => {
+    event.stopPropagation()
+    if (!window.confirm('이 폴더와 안의 모든 영상을 삭제할까요? 되돌릴 수 없습니다.')) return
+    setDeletingId(folderId)
+    deleteFolderMutation.mutate(folderId, {
+      onSuccess: () => {
+        if (folderId === selectedFolderId) {
+          const next = folders.find((folder) => folder.id !== folderId)
+          onSelectFolder(next ? next.id : null)
+        }
+      },
+      onSettled: () => setDeletingId(null),
     })
   }
 
@@ -117,6 +139,14 @@ export function Sidebar({ selectedFolderId, onSelectFolder, onError }: Props) {
                   </span>
                   <span className="truncate">{folder.name}</span>
                 </SidebarMenuButton>
+                <SidebarMenuAction
+                  showOnHover
+                  disabled={deletingId === folder.id}
+                  onClick={(event) => handleDelete(event, folder.id)}
+                  aria-label={`${folder.name} 삭제`}
+                >
+                  <Trash2 />
+                </SidebarMenuAction>
               </SidebarMenuItem>
             ))
           )}

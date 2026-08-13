@@ -63,8 +63,13 @@ export default function WorkspacePage() {
 
   const chat = useChat(workspace?.workspace_code ?? null, selectedFolderId, selectedVideo?.id ?? null, handleError);
 
-  const handleSelectFolder = (folderId: number) => {
-    setSearchParams({ folder: String(folderId) });
+  const handleSelectFolder = (folderId: number | null) => {
+    if (folderId === null) {
+      searchParams.delete("folder");
+      setSearchParams(searchParams);
+    } else {
+      setSearchParams({ folder: String(folderId) });
+    }
     setSelectedVideoId(null);
   };
 
