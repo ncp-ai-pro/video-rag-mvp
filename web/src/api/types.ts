@@ -10,6 +10,9 @@ export interface Workspace {
 
 /** jobs.status와 동일한 어휘 */
 export type AnalysisStatus =
+  /** URL만 접수되고 Worker가 아직 yt-dlp로 metadata(제목·썸네일 등)를 못 가져온 상태.
+   *  title은 백엔드가 이미 "영상 정보를 가져오는 중" 같은 placeholder 문자열로 채워서 준다. */
+  | "metadata_pending"
   | "metadata_only"
   | "queued"
   | "running"
@@ -20,6 +23,7 @@ export type AnalysisStatus =
 
 /** services.ANALYSIS_MESSAGES의 key와 동일. 새 stage 추가 시 백엔드와 함께 갱신할 것. */
 export type AnalysisStage =
+  | "metadata_pending"
   | "metadata_only"
   | "queued"
   | "downloading_caption"
@@ -152,6 +156,9 @@ export const isAnalyzed = (status: AnalysisStatus) =>
 
 export const isAnalysisActive = (status: AnalysisStatus) =>
   status === "queued" || status === "running";
+
+/** metadata(제목·썸네일)조차 아직 없는, analysis 파이프라인 이전 단계. */
+export const isMetadataPending = (status: AnalysisStatus) => status === "metadata_pending";
 
 // --- folder-first-api-spec.md 기준 (백엔드 구현 중, docs/design/folder-first-api-spec.md 참고) ---
 

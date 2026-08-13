@@ -7,6 +7,7 @@ import type {
   FolderCreateResponse,
   FolderVideo,
   JobAccepted,
+  Video,
 } from "./types";
 
 /**
@@ -42,11 +43,27 @@ export async function fetchFolderVideos(folderId: number) {
   return response.items;
 }
 
-// 폴더에 영상 URL을 직접 추가한다. analyze:true면 서버가 바로 분석 job도 등록한다.
+/**
+ * 폴더에 영상 URL을 직접 추가한다. analyze:true면 서버가 바로 분석 job도 등록한다.
+ * yt-dlp rate-limit으로 API가 바로 502 나는 걸 피하려고, 응답은 URL만 접수한 placeholder
+ * video일 수 있다(analysis_status: "metadata_pending", title은 안내 문구). Worker가 metadata를
+ * 채우고 나면 GET /folders/{id}/videos 재조회(폴링)로 실제 제목·썸네일이 반영된다.
+ */
 export async function addFolderVideo(folderId: number, url: string, analyze = true) {
   return post<{
-    video: { id: number; title: string; analysis_status: string };
-    folder_video: { folder_id: number; video_id: number; source: string; added_at: string };
+    video: Pick<
+      Video,
+      | "id"
+      | "platform_video_id"
+      | "title"
+      | "url"
+      | "thumbnail_url"
+      | "duration_seconds"
+      | "analysis_status"
+      | "analysis_stage"
+      | "analysis_message"
+    >;
+    folder_video: { folder_id: number; video_id: number; source: FolderVideo["source"] };
     job: JobAccepted | null;
   }>(`/folders/${folderId}/videos`, { url, analyze });
 }

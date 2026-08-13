@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   ArrowRight,
   ChevronDown,
@@ -93,6 +93,20 @@ export default function IndexPage() {
   const [url, setUrl] = useState("");
   const navigate = useNavigate();
 
+  // 히어로 위에서 마우스를 움직이면 그 위치를 CSS 변수로 넘겨 glow가 커서를 따라오게 한다.
+  // rAF로 묶어서 pointermove마다 매번 리렌더를 유발하지 않고 스타일만 직접 갱신한다.
+  const rafId = useRef<number | null>(null);
+  const handleHeroPointerMove = (event: React.PointerEvent<HTMLElement>) => {
+    const target = event.currentTarget;
+    const { clientX, clientY } = event;
+    if (rafId.current !== null) cancelAnimationFrame(rafId.current);
+    rafId.current = requestAnimationFrame(() => {
+      const rect = target.getBoundingClientRect();
+      target.style.setProperty("--mx", `${clientX - rect.left}px`);
+      target.style.setProperty("--my", `${clientY - rect.top}px`);
+    });
+  };
+
   const { data: folders = [] } = useFolders();
 
   // folder-first-api-spec.md의 "첫 시작 화면 API 흐름" 참고. 사이드바의 "폴더 추가"와 같은 훅을 쓴다.
@@ -112,10 +126,41 @@ export default function IndexPage() {
   };
 
   return (
-    <div id="page-top" className="min-h-0 flex-1 overflow-y-auto scroll-smooth">
+    <div
+      id="page-top"
+      className="relative min-h-0 flex-1 overflow-y-auto scroll-smooth"
+    >
+      {/* 페이지 전체를 관통하는 고정 배경 그라데이션. primary 색상 변수를 그대로 참조해
+          라이트/다크 모드 전환에도 자동으로 맞는다. 섹션마다 solid 배경을 겹치지 않도록
+          아래 섹션들의 bg-muted는 제거하고 이 레이어가 보이게 둔다. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[1400px]"
+        style={{
+          background: [
+            "radial-gradient(ellipse 70% 45% at 50% -5%, color-mix(in oklch, var(--primary) 22%, transparent), transparent 60%)",
+            "radial-gradient(ellipse 55% 40% at 88% 30%, color-mix(in oklch, var(--primary) 13%, transparent), transparent 65%)",
+            "radial-gradient(ellipse 50% 35% at 8% 70%, color-mix(in oklch, var(--primary) 11%, transparent), transparent 65%)",
+          ].join(", "),
+        }}
+      />
+
       {/* 히어로: min-height는 lg 이상에서만 강제한다. 좁은 화면은 폼 + 플로우 미리보기가
-          세로로 쌓이며 콘텐츠 높이만큼만 차지해, 스크롤 힌트와 겹치는 일이 없다. */}
-      <section className="relative flex items-center px-4 py-16 lg:min-h-[calc(100dvh-3.5rem)]">
+          세로로 쌓이며 콘텐츠 높이만큼만 차지해, 스크롤 힌트와 겹치는 일이 없다.
+          onPointerMove로 --mx/--my를 갱신해 아래 glow 레이어가 커서를 따라오게 한다. */}
+      <section
+        onPointerMove={handleHeroPointerMove}
+        style={{ "--mx": "50%", "--my": "35%" } as React.CSSProperties}
+        className="relative flex items-center overflow-hidden px-4 py-16 lg:min-h-[calc(100dvh-3.5rem)]"
+      >
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 -z-10 transition-[background] duration-300"
+          style={{
+            background:
+              "radial-gradient(480px circle at var(--mx) var(--my), color-mix(in oklch, var(--primary) 14%, transparent), transparent 70%)",
+          }}
+        />
         <div className="mx-auto grid w-full max-w-5xl items-center gap-12 lg:grid-cols-2">
           <div className="text-center lg:text-left">
             <h1 className="text-4xl font-bold tracking-tighter text-balance sm:text-5xl lg:text-6xl">
@@ -190,7 +235,7 @@ export default function IndexPage() {
       {/* 페인포인트: 카드 그리드 대신 좌측 헤딩 + 우측 넘버링 리스트(비대칭)로 구성 */}
       <section
         id="pain-points"
-        className="scroll-mt-14 border-t border-border/60 bg-muted/20 px-4 py-20"
+        className="scroll-mt-14 border-t border-border/60 px-4 py-20"
       >
         <div className="mx-auto grid max-w-5xl gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)] lg:gap-16">
           <Reveal>
@@ -252,7 +297,7 @@ export default function IndexPage() {
       </section>
 
       {/* 결과 기능: shadcn Card를 재사용하고, 5개 항목을 2+3 비대칭 그리드로 배치 */}
-      <section className="border-t border-border/60 bg-muted/20 px-4 py-20">
+      <section className="border-t border-border/60 px-4 py-20">
         <div className="mx-auto max-w-5xl text-center">
           <Reveal>
             <p className="text-xs font-medium tracking-wide text-primary">
