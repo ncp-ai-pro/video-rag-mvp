@@ -6,7 +6,7 @@ import { Player, type PlayerHandle } from '@/components/Player'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { formatDuration, formatUploadDate } from '@/lib/format'
-import { isAnalysisActive, isAnalyzed, type Video } from '@/api/types'
+import { isAnalysisActive, isAnalyzed, isMetadataPending, type Video } from '@/api/types'
 
 interface Props {
   video: Video | null
@@ -21,6 +21,19 @@ export function VideoStage({ video, playerRef, onAnalyze }: Props) {
         <div className="space-y-3">
           <PlayCircle className="mx-auto size-10 opacity-40" />
           <p className="text-sm">영상 목록에서 선택하면 여기에 재생됩니다.</p>
+        </div>
+      </div>
+    )
+  }
+
+  // URL만 접수되고 아직 yt-dlp로 metadata(제목·썸네일)도 못 가져온 상태.
+  // 분석 파이프라인 이전 단계라 "분석 시작" CTA를 보여주지 않는다(중복 요청 방지 겸 의미 없음).
+  if (isMetadataPending(video.analysis_status)) {
+    return (
+      <div className="flex flex-1 flex-col gap-3">
+        <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-xl border border-border/60 bg-muted/30 p-4 text-center">
+          <Loader2 className="size-8 animate-spin text-primary" />
+          <p className="text-sm font-medium">영상 정보를 가져오는 중…</p>
         </div>
       </div>
     )

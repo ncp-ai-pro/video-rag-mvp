@@ -141,3 +141,21 @@
     width: 100%;
   }
 }
+
+/* 히어로 하단 "마우스 스크롤" 힌트: 마우스 휠 모양 안에서 점이 아래로 흘러내리듯 움직인다. */
+@keyframes scroll-wheel-dot {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  25% {
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(11px);
+    opacity: 0;
+  }
+}
