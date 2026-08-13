@@ -31,6 +31,7 @@ export function formatUploadDate(value: string | null): string {
 }
 
 export const STAGE_LABEL: Record<AnalysisStage, string> = {
+  metadata_pending: '영상 정보 수집 대기',
   metadata_only: '메타데이터만 수집됨',
   queued: '대기 중',
   downloading_caption: '자막 수집 중',
@@ -42,6 +43,7 @@ export const STAGE_LABEL: Record<AnalysisStage, string> = {
 }
 
 export const STATUS_LABEL: Record<AnalysisStatus, string> = {
+  metadata_pending: '정보 수집 중',
   metadata_only: '미분석',
   queued: '대기',
   running: '분석 중',
@@ -52,6 +54,7 @@ export const STATUS_LABEL: Record<AnalysisStatus, string> = {
 
 /** 진행률 표시용. 실제 백분율이 아니라 stage 순서 기반 근사치다. */
 const STAGE_ORDER: AnalysisStage[] = [
+  'metadata_pending',
   'queued',
   'downloading_caption',
   'transcribing',

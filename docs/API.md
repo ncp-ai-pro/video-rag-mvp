@@ -15,7 +15,7 @@ API 주소: `http://127.0.0.1:8000` · Chat 주소: `http://127.0.0.1:8001`
 | `PATCH` | `/folders/{folder_id}` | 폴더 이름, 설명, 색상 수정 | 200 |
 | `DELETE` | `/folders/{folder_id}` | 폴더 삭제. 영상 원본은 유지 | 204 |
 | `GET` | `/folders/{folder_id}/videos` | 폴더에 들어간 분석/수집 영상 목록 조회 | 200 |
-| `POST` | `/folders/{folder_id}/videos` | YouTube URL을 폴더에 직접 추가하고 선택적으로 분석 작업 등록 | 201 |
+| `POST` | `/folders/{folder_id}/videos` | YouTube URL을 폴더에 placeholder로 추가하고 metadata 수집 job 등록 | 201 |
 | `POST` | `/folders/{folder_id}/videos/{video_id}` | 기존 작업공간 영상을 폴더에 연결 | 201 |
 | `DELETE` | `/folders/{folder_id}/videos/{video_id}` | 폴더에서 영상 연결 제거 | 204 |
 | `GET` | `/folders/{folder_id}/channel-sources` | 폴더에 연결된 채널 수집 소스 목록 조회 | 200 |
@@ -75,7 +75,7 @@ POST /folders/1/chat
 
 `/recommendations`의 결과는 `basis: "제목과 영상 설명의 embedding 유사도"`를 포함한다. `/chat`의 `evidence[]`는 각 `start_seconds`, `end_seconds`, `url`을 포함한다. `video_id`를 보내면 Chat Server가 현재 작업공간 소유 영상인지 확인한 뒤 해당 영상의 자막과 대화 기록만 사용한다. 다른 작업공간의 `video_id`는 `404`를 반환한다.
 
-폴더 API는 기존 채널/영상 API를 제거하지 않고 그 위에 폴더 연결을 추가한다. `POST /folders/{folder_id}/videos`는 현재 구현에서 내부 `직접 추가 영상` channel을 사용해 `videos.channel_id NOT NULL` 구조와 기존 Worker를 그대로 재사용한다. `GET /folders/{folder_id}/candidates`의 `candidate_id`는 현재 구현 기준으로 `video_id`와 같다. 채널 소스에서 수집된 영상 중 아직 `folder_videos`에 연결되지 않은 영상을 후보로 노출한다.
+폴더 API는 기존 채널/영상 API를 제거하지 않고 그 위에 폴더 연결을 추가한다. `POST /folders/{folder_id}/videos`는 현재 구현에서 내부 `직접 추가 영상` channel을 사용해 `videos.channel_id NOT NULL` 구조와 기존 Worker를 그대로 재사용한다. 단일 URL 추가 시 API는 `yt-dlp`를 직접 호출하지 않는다. 우선 `videos`에 placeholder를 저장하고 `jobs.kind='ingest_video'`를 등록한다. Worker가 metadata를 수집한 뒤, 요청의 `analyze=true` 값이 `jobs.payload_json`에 있으면 후속 `analyze_video` job을 만든다. `GET /folders/{folder_id}/candidates`의 `candidate_id`는 현재 구현 기준으로 `video_id`와 같다. 채널 소스에서 수집된 영상 중 아직 `folder_videos`에 연결되지 않은 영상을 후보로 노출한다.
 
 운영 PostgreSQL에는 배포 전에 [docs/db/2026-08-12-folder-first-postgres.sql](db/2026-08-12-folder-first-postgres.sql)을 적용한다. 애플리케이션 시작 시에도 같은 구조를 `CREATE TABLE IF NOT EXISTS`와 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`로 보강하지만, 운영 배포에서는 DB 계정 권한과 서비스 시작 순서를 분리하기 위해 SQL을 먼저 실행하는 것을 권장한다.
 
@@ -107,7 +107,7 @@ event: analysis_status
 data: {"video_id":12,"job_id":314,"status":"running","progress":{"stage":"embedding","message":"자막 구간의 embedding을 생성하고 있습니다."},"error":null,"updated_at":"2026-08-04T05:42:28.123Z"}
 ```
 
-`status`는 `queued`, `running`, `succeeded`, `failed` 중 하나다. `progress.stage`는 `queued`, `downloading_caption`, `transcribing`, `chunking`, `embedding`, `completed`, `failed` 중 하나다. terminal event인 `succeeded` 또는 `failed`를 보낸 뒤 stream은 종료된다.
+`status`는 `queued`, `running`, `succeeded`, `failed` 중 하나다. `progress.stage`는 `metadata_pending`, `queued`, `downloading_caption`, `transcribing`, `chunking`, `embedding`, `completed`, `failed` 중 하나다. terminal event인 `succeeded` 또는 `failed`를 보낸 뒤 stream은 종료된다.
 
 Worker는 FastAPI에 HTTP callback을 보내지 않는다. Worker가 `jobs`와 `videos`에 상태를 기록하면 SSE endpoint가 DB를 1초 간격으로 읽어 브라우저에 전달한다.
 

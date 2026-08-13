@@ -72,6 +72,7 @@ services:
     environment:
       DATABASE_URL: postgresql://video_rag:video_rag_local@postgres:5432/video_rag
       REDIS_URL: redis://redis:6379/0
+      ANALYSIS_QUEUE_PROVIDER: rabbitmq
       RABBITMQ_URL: amqp://video_rag:video_rag_local@rabbitmq:5672/%2F
       WORKER_QUEUE_MODE: rabbitmq
       WORKER_PREFETCH_COUNT: 1

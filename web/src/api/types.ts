@@ -8,8 +8,9 @@ export interface Workspace {
   workspace_code: string;
 }
 
-/** jobs.status와 동일한 어휘 */
+/** videos.analysis_status와 화면에서 쓰는 상태 어휘 */
 export type AnalysisStatus =
+  | "metadata_pending"
   | "metadata_only"
   | "queued"
   | "running"
@@ -20,6 +21,7 @@ export type AnalysisStatus =
 
 /** services.ANALYSIS_MESSAGES의 key와 동일. 새 stage 추가 시 백엔드와 함께 갱신할 것. */
 export type AnalysisStage =
+  | "metadata_pending"
   | "metadata_only"
   | "queued"
   | "downloading_caption"
@@ -151,7 +153,7 @@ export const isAnalyzed = (status: AnalysisStatus) =>
   status === "succeeded" || status === "ready";
 
 export const isAnalysisActive = (status: AnalysisStatus) =>
-  status === "queued" || status === "running";
+  status === "metadata_pending" || status === "queued" || status === "running";
 
 // --- folder-first-api-spec.md 기준 (백엔드 구현 중, docs/design/folder-first-api-spec.md 참고) ---
 
