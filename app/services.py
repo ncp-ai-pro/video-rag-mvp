@@ -5,7 +5,7 @@ import re
 import subprocess
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Iterator, List, Optional
 from urllib.parse import parse_qs, urlparse
@@ -25,6 +25,15 @@ ANALYSIS_MESSAGES = {
     "completed": "분석이 완료되었습니다. 이제 질문할 수 있습니다.",
     "failed": "분석에 실패했습니다.",
 }
+
+YOUTUBE_RATE_LIMIT_MARKERS = (
+    "rate-limited",
+    "rate limited",
+    "try again later",
+    "too many requests",
+    "http error 429",
+    "429 too many requests",
+)
 
 
 def object_storage_is_configured() -> bool:
@@ -314,16 +323,20 @@ def publish_job_signal(job_id: int, kind: str, priority: str, idempotency_key: O
 
 
 def publish_pending_outbox(limit: int = 100) -> Dict:
-    """Publishes pending job events again; useful after RabbitMQ downtime."""
+    """Publishes due pending job events again; useful after RabbitMQ downtime or delayed retry."""
     published = 0
     failed = 0
     with connection() as conn:
         rows = conn.execute(
             """
-            SELECT id, aggregate_id, payload_json
+            SELECT outbox_events.id, outbox_events.aggregate_id, outbox_events.payload_json
             FROM outbox_events
-            WHERE status='pending' AND event_type='analysis_job_queued'
-            ORDER BY id
+            JOIN jobs ON jobs.id=outbox_events.aggregate_id
+            WHERE outbox_events.status='pending'
+              AND outbox_events.event_type='analysis_job_queued'
+              AND jobs.status='queued'
+              AND (jobs.next_run_at IS NULL OR jobs.next_run_at <= CURRENT_TIMESTAMP)
+            ORDER BY outbox_events.id
             LIMIT ?
             """,
             (limit,),
@@ -360,6 +373,62 @@ def publish_pending_outbox(limit: int = 100) -> Dict:
                 )
             failed += 1
     return {"published": published, "failed": failed}
+
+
+def _job_retry_timestamp(delay_seconds: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def schedule_job_retry(job: Dict, error: str, *, delay_seconds: Optional[int] = None) -> bool:
+    """Move a running job back to queued with a future next_run_at.
+
+    Returns False when the job already consumed its retry budget, so the caller
+    can mark the job failed through the normal terminal-state path.
+    """
+    attempts = int(job.get("attempts") or 0)
+    max_attempts = int(job.get("max_attempts") or 3)
+    if attempts >= max_attempts:
+        return False
+
+    retry_delay = delay_seconds or config.YTDLP_RATE_LIMIT_RETRY_DELAY_SECONDS
+    next_run_at = _job_retry_timestamp(retry_delay)
+    retry_minutes = max(1, round(retry_delay / 60))
+    message = f"YouTube 요청 제한으로 {retry_minutes}분 뒤 다시 시도합니다. ({attempts}/{max_attempts})"
+    priority = analysis_queue.priority_name_from_database(int(job.get("priority") or 100))
+    idempotency_key = job.get("idempotency_key")
+    job_id = int(job["id"])
+
+    with connection() as conn:
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status='queued', progress_stage='queued', progress_message=?, error_message=?,
+                next_run_at=?, locked_at=NULL, locked_by=NULL, finished_at=NULL,
+                updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id=?
+            """,
+            (message, str(error)[:2000], next_run_at, job_id),
+        )
+        if job["kind"] == "analyze_video":
+            conn.execute(
+                """
+                UPDATE videos
+                SET analysis_status='queued', analysis_stage='queued', analysis_message=?,
+                    analysis_error=?, analysis_updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id=?
+                """,
+                (message, str(error)[:2000], job["resource_id"]),
+            )
+            conn.execute(
+                """
+                UPDATE video_analysis_index
+                SET analysis_status='queued', last_job_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE representative_video_id=?
+                """,
+                (job_id, job["resource_id"]),
+            )
+        _insert_outbox_event(conn, job_id, job["kind"], priority, idempotency_key)
+    return True
 
 
 def enqueue(kind: str, resource_id: int, *, priority: str = "normal", idempotency_key: Optional[str] = None) -> int:
@@ -623,6 +692,24 @@ def _yt_dlp_failure_message(result: subprocess.CompletedProcess) -> str:
     return (error_lines or lines or ["yt-dlp exited without an error message"])[-1][:500]
 
 
+def yt_dlp_throttle_args() -> List[str]:
+    """Return yt-dlp pacing options used by API metadata calls and Worker downloads."""
+    args = []
+    if config.YTDLP_SLEEP_REQUESTS_SECONDS > 0:
+        args.extend(["--sleep-requests", str(config.YTDLP_SLEEP_REQUESTS_SECONDS)])
+    if config.YTDLP_SLEEP_INTERVAL_SECONDS > 0:
+        args.extend(["--sleep-interval", str(config.YTDLP_SLEEP_INTERVAL_SECONDS)])
+    if config.YTDLP_MAX_SLEEP_INTERVAL_SECONDS > 0:
+        args.extend(["--max-sleep-interval", str(config.YTDLP_MAX_SLEEP_INTERVAL_SECONDS)])
+    return args
+
+
+def is_youtube_rate_limited_error(message: str) -> bool:
+    """Detect YouTube throttling errors from yt-dlp output."""
+    normalized = str(message or "").lower()
+    return any(marker in normalized for marker in YOUTUBE_RATE_LIMIT_MARKERS)
+
+
 def _youtube_video_id(url: str) -> Optional[str]:
     parsed = urlparse(url)
     host = parsed.netloc.lower().removeprefix("www.").removeprefix("m.")
@@ -658,7 +745,14 @@ def collect_channel_metadata(url: str) -> List[Dict]:
     single_video_id = _youtube_video_id(url)
     if single_video_id:
         result = subprocess.run(
-            [config.YTDLP_BIN, "--dump-single-json", "--skip-download", "--no-playlist", url],
+            [
+                config.YTDLP_BIN,
+                "--dump-single-json",
+                "--skip-download",
+                "--no-playlist",
+                *yt_dlp_throttle_args(),
+                url,
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -669,7 +763,7 @@ def collect_channel_metadata(url: str) -> List[Dict]:
         return [_video_metadata_from_ytdlp(json.loads(result.stdout), single_video_id)]
 
     result = subprocess.run(
-        [config.YTDLP_BIN, "--flat-playlist", "--dump-json", "--skip-download", url],
+        [config.YTDLP_BIN, "--flat-playlist", "--dump-json", "--skip-download", *yt_dlp_throttle_args(), url],
         check=False,
         capture_output=True,
         text=True,

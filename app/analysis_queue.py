@@ -32,6 +32,14 @@ def priority_values(priority: str) -> Mapping[str, int]:
     }
 
 
+def priority_name_from_database(priority: int) -> str:
+    """Return the configured priority name for a persisted database priority."""
+    for name, value in DATABASE_PRIORITIES.items():
+        if value == priority:
+            return name
+    return "normal"
+
+
 def _queue_provider() -> str:
     return getattr(config, "ANALYSIS_QUEUE_PROVIDER", "postgres").strip().lower()
 

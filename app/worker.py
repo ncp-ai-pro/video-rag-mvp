@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -17,14 +18,18 @@ from .services import (
     finish_analysis,
     has_video_embedding,
     import_transcript,
+    is_youtube_rate_limited_error,
     normalize_clova_speech_segments,
     object_storage_is_configured,
+    publish_pending_outbox,
     record_analysis_artifact,
+    schedule_job_retry,
     transcribe_object_storage,
     update_analysis_progress,
     upload_artifact_file,
     upload_artifact_json,
     upsert_video,
+    yt_dlp_throttle_args,
 )
 
 
@@ -72,6 +77,7 @@ def download_subtitles(video_url: str, output_dir: Path) -> Optional[Path]:
             "--extractor-retries",
             "3",
             "--no-progress",
+            *yt_dlp_throttle_args(),
             "-o",
             str(output_dir / "source.%(ext)s"),
             video_url,
@@ -143,7 +149,11 @@ def claim_job():
 
 def claim_job_by_id(job_id: int):
     with connection() as conn:
-        query = "SELECT * FROM jobs WHERE id=? AND status='queued'"
+        query = """
+            SELECT * FROM jobs
+            WHERE id=? AND status='queued'
+              AND (next_run_at IS NULL OR next_run_at <= CURRENT_TIMESTAMP)
+        """
         if is_postgres():
             query += " FOR UPDATE SKIP LOCKED"
         row = conn.execute(query, (job_id,)).fetchone()
@@ -234,6 +244,7 @@ def download_audio(video_url: str, output_dir: Path) -> Path:
             "--extractor-retries",
             "3",
             "--no-progress",
+            *yt_dlp_throttle_args(),
             "-o",
             str(output_template),
             video_url,
@@ -470,6 +481,8 @@ def run_once():
             analyze_video(job["id"], job["resource_id"])
             finish_analysis(job["id"], job["resource_id"])
     except Exception as exc:
+        if is_youtube_rate_limited_error(str(exc)) and schedule_job_retry(job, str(exc)):
+            return True
         if job["kind"] == "analyze_video":
             finish_analysis(job["id"], job["resource_id"], str(exc))
         else:
@@ -486,6 +499,8 @@ def _run_claimed_job(job) -> bool:
             analyze_video(job["id"], job["resource_id"])
             finish_analysis(job["id"], job["resource_id"])
     except Exception as exc:
+        if is_youtube_rate_limited_error(str(exc)) and schedule_job_retry(job, str(exc)):
+            return True
         if job["kind"] == "analyze_video":
             finish_analysis(job["id"], job["resource_id"], str(exc))
         else:
@@ -507,6 +522,16 @@ def consume_rabbitmq():
     name = queue_name()
     channel.queue_declare(queue=name, durable=True, arguments=queue_arguments())
     channel.basic_qos(prefetch_count=config.WORKER_PREFETCH_COUNT)
+
+    def republish_due_jobs():
+        while True:
+            try:
+                publish_pending_outbox()
+            except Exception as exc:
+                print(f"outbox_publish_failed: {exc}", flush=True)
+            time.sleep(config.WORKER_OUTBOX_PUBLISH_INTERVAL_SECONDS)
+
+    threading.Thread(target=republish_due_jobs, daemon=True).start()
 
     def on_message(ch, method, properties, body):
         try:

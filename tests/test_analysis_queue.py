@@ -10,6 +10,11 @@ def test_priority_values_map_named_priorities():
     assert analysis_queue.priority_values("manual") == {"rabbitmq": 7, "database": 50}
     assert analysis_queue.priority_values("normal") == {"rabbitmq": 4, "database": 100}
     assert analysis_queue.priority_values("bulk") == {"rabbitmq": 1, "database": 500}
+    assert analysis_queue.priority_name_from_database(0) == "ultra"
+    assert analysis_queue.priority_name_from_database(50) == "manual"
+    assert analysis_queue.priority_name_from_database(100) == "normal"
+    assert analysis_queue.priority_name_from_database(500) == "bulk"
+    assert analysis_queue.priority_name_from_database(999) == "normal"
 
 
 def test_priority_values_reject_unknown_name():
