@@ -3,6 +3,12 @@ import { CHAT_BASE, CHAT_CREDENTIALS } from "@/lib/config";
 import type { ChatHistoryPage, ChatResponse, Evidence, EvidenceMode, TtsVoice } from "./types";
 
 /**
+ * docs/design/folder-first-api-spec.md 기준 폴더 스코프 채팅.
+ * app/routers/folders.py가 API 서버(8000)·Chat 서버(8001) 양쪽에 mount돼 있어 CHAT_BASE로도 정상 동작한다.
+ * 기존 /chat/*(작업공간·영상 스코프)는 그대로 유지된다.
+ */
+
+/**
  * 작업공간의 저장된 대화 기록을 최신순 커서로 페이지네이션해서 불러온다.
  * videoId를 주면 그 영상의 대화만 좁혀서 가져온다(히스토리도 영상 단위로 저장된다).
  * Chat 서버가 세션 쿠키로 작업공간을 식별한다. assistant 메시지는 그때 근거도 함께 저장돼 있다.
@@ -77,36 +83,8 @@ function toStreamEvent(event: string, raw: string): ChatStreamEvent | null {
   }
 }
 
-/**
- * video_id를 보내면 백엔드가 그 영상으로 근거를 좁힌다. null이면 작업공간 전체.
- * evidenceMode="precise"|"ultra"면 각 근거에 질문과 겹치는 문장(highlight)이 함께 붙어 온다.
- */
-export async function streamChat(
-  query: string,
-  onEvent: (event: ChatStreamEvent) => void,
-  options: {
-    limit?: number;
-    signal?: AbortSignal;
-    videoId?: number | null;
-    evidenceMode?: EvidenceMode;
-  } = {},
-): Promise<void> {
-  const response = await fetch(`${CHAT_BASE}/chat/stream`, {
-    method: "POST",
-    credentials: CHAT_CREDENTIALS,
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "text/event-stream",
-    },
-    body: JSON.stringify({
-      query,
-      limit: options.limit ?? 3,
-      video_id: options.videoId ?? null,
-      evidence_mode: options.evidenceMode ?? "simple",
-    }),
-    signal: options.signal,
-  });
-
+/** SSE 응답 본문을 프레임 단위로 읽어 이벤트를 흘려보낸다. streamChat·streamFolderChat이 공유한다. */
+async function consumeChatStream(response: Response, onEvent: (event: ChatStreamEvent) => void): Promise<void> {
   if (!response.ok || !response.body) {
     const body = await response.json().catch(() => null);
     throw new ApiError(
@@ -141,6 +119,89 @@ export async function streamChat(
       return;
     }
   }
+}
+
+/**
+ * video_id를 보내면 백엔드가 그 영상으로 근거를 좁힌다. null이면 작업공간 전체.
+ * evidenceMode="precise"|"ultra"면 각 근거에 질문과 겹치는 문장(highlight)이 함께 붙어 온다.
+ */
+export async function streamChat(
+  query: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  options: {
+    limit?: number;
+    signal?: AbortSignal;
+    videoId?: number | null;
+    evidenceMode?: EvidenceMode;
+  } = {},
+): Promise<void> {
+  const response = await fetch(`${CHAT_BASE}/chat/stream`, {
+    method: "POST",
+    credentials: CHAT_CREDENTIALS,
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({
+      query,
+      limit: options.limit ?? 3,
+      video_id: options.videoId ?? null,
+      evidence_mode: options.evidenceMode ?? "simple",
+    }),
+    signal: options.signal,
+  });
+  return consumeChatStream(response, onEvent);
+}
+
+/**
+ * 폴더 스코프 채팅. video_id가 없으면 폴더 안 분석 완료 영상 전체를 검색한다(폴더 전체 RAG).
+ */
+export async function streamFolderChat(
+  folderId: number,
+  query: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  options: {
+    limit?: number;
+    signal?: AbortSignal;
+    videoId?: number | null;
+    evidenceMode?: EvidenceMode;
+  } = {},
+): Promise<void> {
+  const response = await fetch(`${CHAT_BASE}/folders/${folderId}/chat/stream`, {
+    method: "POST",
+    credentials: CHAT_CREDENTIALS,
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({
+      query,
+      limit: options.limit ?? 3,
+      video_id: options.videoId ?? null,
+      evidence_mode: options.evidenceMode ?? "simple",
+    }),
+    signal: options.signal,
+  });
+  return consumeChatStream(response, onEvent);
+}
+
+/** 폴더 단위 대화 기록. video_id를 주면 폴더 안 특정 영상 대화만 좁힌다. */
+export async function fetchFolderChatHistory(
+  folderId: number,
+  options: { limit?: number; beforeId?: number | null; videoId?: number | null } = {},
+): Promise<ChatHistoryPage> {
+  const params = new URLSearchParams({ limit: String(options.limit ?? 20) });
+  if (options.beforeId != null) params.set("before_id", String(options.beforeId));
+  if (options.videoId != null) params.set("video_id", String(options.videoId));
+
+  const response = await fetch(`${CHAT_BASE}/folders/${folderId}/chat/history?${params}`, {
+    credentials: CHAT_CREDENTIALS,
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!response.ok) {
+    throw new ApiError("대화 기록을 불러오지 못했습니다.", response.status);
+  }
+  return (await response.json()) as ChatHistoryPage;
 }
 
 /** 답변 텍스트를 CLOVA Voice로 합성해 mp3 오디오로 받는다. */

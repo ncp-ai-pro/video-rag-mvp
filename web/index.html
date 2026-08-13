@@ -1,7 +1,17 @@
 <!doctype html>
-<html lang="ko" class="dark">
+<html lang="ko">
   <head>
     <meta charset="UTF-8" />
+    <!-- next-themes가 React 마운트 전에 테마를 못 정해서 생기는 깜빡임(FOUC)을 막는다.
+         localStorage에 저장된 값(next-themes 기본 키 "theme")을 페인트 전에 바로 적용한다. -->
+    <script>
+      (function () {
+        try {
+          var theme = localStorage.getItem("theme") || "dark";
+          if (theme === "dark") document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VideRAG</title>
