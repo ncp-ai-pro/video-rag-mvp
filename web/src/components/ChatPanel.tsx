@@ -7,7 +7,11 @@ import { Input } from "@/components/ui/input";
 import { useExportChat } from "@/hooks/chat/use-export-chat";
 import { useTts } from "@/hooks/chat/use-tts";
 import type { UseChatResult } from "@/hooks/chat/use-chat";
-import { isAnalysisActive, isMetadataPending, type FolderVideo } from "@/api/types";
+import {
+  isAnalysisActive,
+  isMetadataPending,
+  type FolderVideo,
+} from "@/api/types";
 
 interface Props {
   /** 대화 상태·동작은 WorkspacePage가 useChat으로 만들어 내려준다(EvidencePanel과 turns를 공유하기 위해). */
@@ -20,7 +24,9 @@ interface Props {
 export function ChatPanel({ chat, video, onError }: Props) {
   const videoId = video?.id ?? null;
   const videoTitle = video?.title ?? null;
-  const metadataPending = video ? isMetadataPending(video.analysis_status) : false;
+  const metadataPending = video
+    ? isMetadataPending(video.analysis_status)
+    : false;
   const analyzing = video ? isAnalysisActive(video.analysis_status) : false;
   const {
     turns,
@@ -104,114 +110,114 @@ export function ChatPanel({ chat, video, onError }: Props) {
           <AnalysisProgress video={video} />
         </div>
       ) : (
-      /* 대화 (백엔드 저장, 영상 단위) */
-      <div
-        ref={scrollRef}
-        className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4"
-        onScroll={(event) => {
-          if (event.currentTarget.scrollTop <= 24) loadOlder();
-        }}
-      >
-        {historyHasMore && (
-          <div className="flex justify-center">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={historyLoading}
-              onClick={loadOlder}
-            >
-              {historyLoading ? "불러오는 중…" : "이전 대화"}
-            </Button>
-          </div>
-        )}
-
-        {turns.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            {canAsk
-              ? "이 영상에서 분석된 자막 근거를 찾아 답합니다. 아래에 질문을 입력하세요."
-              : "영상 목록에서 질문할 영상을 먼저 선택하세요."}
-          </p>
-        )}
-
-        {turns.map((turn, index) => {
-          const isLast = index === turns.length - 1;
-          return (
-            <div key={turn.id} className="space-y-2">
-              {/* 사용자 질문 */}
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  disabled={!turn.id.startsWith("message-")}
-                  onClick={() => toggleTurnSelection(turn.id)}
-                  className={`max-w-[85%] rounded-2xl rounded-tr-sm px-3 py-2 text-left text-sm text-primary-foreground transition-colors ${
-                    selectedTurnIds.has(turn.id)
-                      ? "bg-primary ring-2 ring-primary ring-offset-2 ring-offset-background"
-                      : "bg-primary/80 hover:bg-primary"
-                  }`}
-                >
-                  {turn.question}
-                </button>
-              </div>
-
-              {/* AI 답변 */}
-              {(turn.answer || turn.status === "streaming") && (
-                <div className="rounded-2xl rounded-tl-sm bg-muted/50 px-3 py-2">
-                  <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                    {turn.answer}
-                    {isLast && streaming && turn.status === "streaming" && (
-                      <span className="ml-0.5 animate-pulse">▍</span>
-                    )}
-                  </p>
-                </div>
-              )}
-
-              {turn.status === "error" && (
-                <p className="text-xs text-destructive">
-                  답변 생성에 실패했습니다.
-                </p>
-              )}
-
-              {turn.status === "done" && turn.answer.trim() && (
-                <div className="flex items-center gap-2">
-                  {tts.turnId === turn.id && tts.audioUrl ? (
-                    <audio
-                      controls
-                      autoPlay
-                      src={tts.audioUrl}
-                      className="h-8 flex-1"
-                      onPlay={(event) => {
-                        event.currentTarget.playbackRate = 1.5;
-                      }}
-                    />
-                  ) : (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="xs"
-                      disabled={tts.loading}
-                      onClick={() => void tts.play(turn.id, turn.answer)}
-                    >
-                      <Volume2 />
-                      {tts.loading && tts.turnId === turn.id
-                        ? "생성 중…"
-                        : "답변 듣기"}
-                    </Button>
-                  )}
-
-                  {/* 근거 상세는 채팅을 길게 만들지 않도록 오른쪽 근거 패널에서 보여준다.
-                      이 배지는 몇 개인지만 알려준다(모바일엔 호버가 없어 클릭·호버 트리거 대신 이 편이 낫다). */}
-                  {turn.evidence.length > 0 && (
-                    <span className="text-[0.72rem] text-muted-foreground">
-                      근거 {turn.evidence.length}개 → 오른쪽 패널
-                    </span>
-                  )}
-                </div>
-              )}
+        /* 대화 (백엔드 저장, 영상 단위) */
+        <div
+          ref={scrollRef}
+          className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4"
+          onScroll={(event) => {
+            if (event.currentTarget.scrollTop <= 24) loadOlder();
+          }}
+        >
+          {historyHasMore && (
+            <div className="flex justify-center">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={historyLoading}
+                onClick={loadOlder}
+              >
+                {historyLoading ? "불러오는 중…" : "이전 대화"}
+              </Button>
             </div>
-          );
-        })}
-      </div>
+          )}
+
+          {turns.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              {canAsk
+                ? "이 영상에서 분석된 자막 근거를 찾아 답합니다. 아래에 질문을 입력하세요."
+                : "영상 목록에서 질문할 영상을 먼저 선택하세요."}
+            </p>
+          )}
+
+          {turns.map((turn, index) => {
+            const isLast = index === turns.length - 1;
+            return (
+              <div key={turn.id} className="space-y-2">
+                {/* 사용자 질문 */}
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    disabled={!turn.id.startsWith("message-")}
+                    onClick={() => toggleTurnSelection(turn.id)}
+                    className={`max-w-[85%] rounded-2xl rounded-tr-sm px-3 py-2 text-left text-sm text-primary-foreground transition-colors ${
+                      selectedTurnIds.has(turn.id)
+                        ? "bg-primary ring-2 ring-primary ring-offset-2 ring-offset-background"
+                        : "bg-primary/80 hover:bg-primary"
+                    }`}
+                  >
+                    {turn.question}
+                  </button>
+                </div>
+
+                {/* AI 답변 */}
+                {(turn.answer || turn.status === "streaming") && (
+                  <div className="rounded-2xl rounded-tl-sm bg-muted/50 px-3 py-2">
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                      {turn.answer}
+                      {isLast && streaming && turn.status === "streaming" && (
+                        <span className="ml-0.5 animate-pulse">▍</span>
+                      )}
+                    </p>
+                  </div>
+                )}
+
+                {turn.status === "error" && (
+                  <p className="text-xs text-destructive">
+                    답변 생성에 실패했습니다.
+                  </p>
+                )}
+
+                {turn.status === "done" && turn.answer.trim() && (
+                  <div className="flex items-center gap-2">
+                    {tts.turnId === turn.id && tts.audioUrl ? (
+                      <audio
+                        controls
+                        autoPlay
+                        src={tts.audioUrl}
+                        className="h-8 flex-1"
+                        onPlay={(event) => {
+                          event.currentTarget.playbackRate = 1.5;
+                        }}
+                      />
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="xs"
+                        disabled={tts.loading}
+                        onClick={() => void tts.play(turn.id, turn.answer)}
+                      >
+                        <Volume2 />
+                        {tts.loading && tts.turnId === turn.id
+                          ? "생성 중…"
+                          : "답변 듣기"}
+                      </Button>
+                    )}
+
+                    {/* 근거 상세는 채팅을 길게 만들지 않도록 오른쪽 근거 패널에서 보여준다.
+                      이 배지는 몇 개인지만 알려준다(모바일엔 호버가 없어 클릭·호버 트리거 대신 이 편이 낫다). */}
+                    {turn.evidence.length > 0 && (
+                      <span className="text-[0.72rem] text-muted-foreground">
+                        근거 {turn.evidence.length}개 → 오른쪽 패널
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
 
       {/* 입력 */}
@@ -310,7 +316,7 @@ export function ChatPanel({ chat, video, onError }: Props) {
           >
             {exportingFormat === "txt" ? "내보내는 중…" : "TXT"}
           </Button>
-          <Button
+          {/* <Button
             type="button"
             variant="ghost"
             size="sm"
@@ -326,7 +332,7 @@ export function ChatPanel({ chat, video, onError }: Props) {
             }
           >
             {exportingFormat === "pdf" ? "내보내는 중…" : "PDF"}
-          </Button>
+          </Button> */}
         </form>
       </div>
     </div>
